@@ -205,6 +205,10 @@ class Schema:
             struct.pack(fmt, *vals)
         ])
 
+    def decode_header(self, buffer: Union[bytes, memoryview]):
+        buffer = memoryview(buffer)
+        return _unpack_composite(self, self.types['messageHeader'], buffer).value
+
     def decode(self, buffer: Union[bytes, memoryview]):
         buffer = memoryview(buffer)
 

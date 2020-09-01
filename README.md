@@ -36,6 +36,10 @@ x.value
 
 # If you need an offset, apply them Pythonicaly
 schema.decode(buf[19:])
+
+# decode_header to avoid filter out messages based on header to avoid decoding
+# message bodies that are not needed
+schema.decode_header(buf)['templateId']
 ```
 
 ### Encoding

@@ -1,7 +1,7 @@
 import enum
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, TextIO, Union
+from typing import Dict, List, NewType, Optional, TextIO, Union
 
 import lxml
 import lxml.etree
@@ -21,11 +21,6 @@ class PrimitiveType(enum.Enum):
     DOUBLE = 'double'
 
 
-FORMAT = dict(zip(PrimitiveType.__members__.values(), "cBHIQbhiqfd"))
-FORMAT_SIZES = {k: struct.calcsize(v) for k, v in FORMAT.items()}
-PRIMITIVE_TYPES = set(x.value for x in PrimitiveType.__members__.values())
-
-
 class SetEncodingType(enum.Enum):
     UINT8 = 'uint8'
     UINT16 = 'uint16'
@@ -36,6 +31,17 @@ class SetEncodingType(enum.Enum):
 class EnumEncodingType(enum.Enum):
     UINT8 = 'uint8'
     CHAR = 'char'
+
+
+FormatString = NewType('FormatString', str)
+
+
+FORMAT = dict(zip(PrimitiveType.__members__.values(), "cBHIQbhiqfd"))
+FORMAT_TO_TYPE = {v: k for k, v in FORMAT.items()}
+FORMAT_SIZES = {k: struct.calcsize(v) for k, v in FORMAT.items()}
+PRIMITIVE_TYPES = set(x.value for x in PrimitiveType.__members__.values())
+ENUM_ENCODING_TYPES = set(x.value for x in EnumEncodingType.__members__.values())
+SET_ENCODING_TYPES = set(x.value for x in SetEncodingType.__members__.values())
 
 
 class Presence(enum.Enum):
@@ -93,13 +99,51 @@ class EnumValue:
 
 
 @dataclass
+class Pointer:
+    offset: int
+    value: Union[FormatString, Dict[str, 'Pointer']]
+    size: int
+    is_group = False
+    enum: Optional['Enum'] = None
+
+    def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite']):
+        rv = struct.unpack_from("<" + self.value, buf, self.offset + offset)[0]
+        if self.enum:
+            return self.enum.find_name_by_value(rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
+        elif self.value.endswith("s"):
+            return rv.replace(b"\x00", b"").decode('ascii', errors='ignore').strip()
+        else:
+            return rv
+
+    def unpack(self, buf: memoryview):
+        return self.return_value(buf, 0, None)
+
+    def __repr__(self):
+        if self.enum:
+            return f"{self.enum.name}@{self.offset}"
+        elif self.value in FORMAT_TO_TYPE:
+            return f"{FORMAT_TO_TYPE[self.value].value}@{self.offset}"
+        else:
+            return f"{self.value}@{self.offset}"
+
+
+@dataclass
+class SetChoice:
+    name: str
+    value: str
+
+    def __repr__(self):
+        return (self.name, self.value).__repr__()
+
+
+@dataclass
 class Enum:
     name: str
     encodingType: Union[EnumEncodingType, Type]
     presence = Presence.REQUIRED
     semanticType: Optional[str] = None
     description: Optional[str] = None
-    valid_values: List[EnumValue] = field(default_factory=lambda: [])
+    valid_values: List[EnumValue] = field(default_factory=list)
 
     def find_value_by_name(self, name: str) -> str:
         return int(next(x for x in self.valid_values if x.name == name).value)
@@ -114,7 +158,7 @@ class Enum:
 @dataclass
 class Composite:
     name: str
-    types: List[Union['Composite', Type]] = field(default_factory=lambda: [])
+    types: List[Union['Composite', Type]] = field(default_factory=list)
     description: Optional[str] = None
 
     def __repr__(self):
@@ -128,6 +172,7 @@ class Set:
     presence = Presence.REQUIRED
     semanticType: Optional[str] = None
     description: Optional[str] = None
+    choices: List[SetChoice] = field(default_factory=list)
 
     def __repr__(self):
         return f"<Set '{self.name}'>"
@@ -154,7 +199,7 @@ class Group:
     id: str
     dimensionType: Composite
     description: Optional[str] = None
-    fields: List[Union['Group', Field]] = field(default_factory=lambda: [])
+    fields: List[Union['Group', Field]] = field(default_factory=list)
 
 
 @dataclass
@@ -162,7 +207,91 @@ class Message:
     name: str
     id: int
     description: Optional[str] = None
-    fields: List[Union[Group, Field]] = field(default_factory=lambda: [], repr=False)
+    fields: List[Union[Group, Field]] = field(default_factory=list, repr=False)
+
+
+@dataclass
+class WrappedComposite:
+    name: str
+    pointers: Dict[str, Union[Pointer, 'WrappedComposite', 'WrappedGroup']]
+    buf: Optional[memoryview]
+    offset: int
+    schema: Optional['Schema'] = None
+    hydrated = False
+
+    def hydrate(self, offset: int):
+        cursor = offset
+        for k, p in self.pointers.items():
+            seen_group = False
+            if isinstance(p, WrappedGroup):
+                p1 = WrappedGroup(
+                    self.buf, self.name, cursor, p.pointers, self,
+                    p.num_in_group_pointer, p.block_length_pointer)
+
+                p1.buf = self.buf
+                p1.offset = cursor
+                p1.hydrate()
+                self.pointers[k] = p1
+                cursor += p1.numInGroup * p1.blockLength
+                seen_group = True
+            else:
+                assert not seen_group
+
+    def get_raw_pointer(self, key):
+        p = self.pointers[key]
+        p.enum = None
+        return Pointer(self.offset + p.offset, p.value, p.size)
+
+    def __getitem__(self, key):
+        return self.pointers[key].return_value(self.buf, self.offset, self)
+
+    def __repr__(self):
+        return f"<WrappedComposite '{self.name}'>"
+
+
+@dataclass
+class WrappedMessage:
+    buf: memoryview
+
+    header: WrappedComposite
+    body: Optional[WrappedComposite]
+
+
+@dataclass
+class WrappedGroup:
+    buf: Optional[memoryview]
+    name: str
+    offset: int
+    pointers: Dict[str, Union[Pointer, 'WrappedGroup']]
+    schema: Optional['Schema']
+
+    num_in_group_pointer: Pointer
+    block_length_pointer: Pointer
+
+    numInGroup = 0
+    blockLength = 0
+
+    def return_value(self, _buf: memoryview, _offset: int, _schema: Optional['Schema']):
+        return self
+
+    def hydrate(self):
+        self.numInGroup = struct.unpack_from(
+            "<" + self.num_in_group_pointer.value, self.buf,
+            self.offset + self.num_in_group_pointer.offset)[0]
+
+        self.blockLength = struct.unpack_from(
+            "<" + self.block_length_pointer.value, self.buf,
+            self.offset + self.block_length_pointer.offset)[0]
+
+    def __getitem__(self, i: int):
+        offset = self.offset + self.blockLength * i
+        return WrappedComposite(f"{self.name}[{i}]", self.pointers, self.buf, offset)
+
+    def __repr__(self):
+        return f"<WrappedGroup '{self.name}' numInGroup={self.numInGroup}>"
+
+    def __len__(self):
+        return self.numInGroup
 
 
 @dataclass
@@ -174,14 +303,20 @@ class Cursor:
 class Schema:
     id: int
     version: int
-    types: Dict[str, Union[Composite, Type]] = field(default_factory=lambda: {})
-    messages: Dict[str, Message] = field(default_factory=lambda: {})
+    types: Dict[str, Union[Composite, Type]] = field(default_factory=dict)
+    messages: Dict[int, Message] = field(default_factory=dict)
+
+    header_wrapper: WrappedComposite = None
+    header_size: int = None
+    message_wrappers: Dict[int, WrappedComposite] = field(default_factory=dict)
 
     @classmethod
-    def parse(cls, f: TextIO):
-        return _parse_schema(f)
+    def parse(cls, f: TextIO) -> 'Schema':
+        rv = _parse_schema(f)
+        rv.create_wrappers()
+        return rv
 
-    def encode(self, message: Message, obj: dict, header: Optional[dict] = None):
+    def encode(self, message: Message, obj: dict, header: Optional[dict] = None) -> bytes:
         if header is None:
             header = {}
 
@@ -205,11 +340,11 @@ class Schema:
             struct.pack(fmt, *vals)
         ])
 
-    def decode_header(self, buffer: Union[bytes, memoryview]):
+    def decode_header(self, buffer: Union[bytes, memoryview]) -> dict:
         buffer = memoryview(buffer)
         return _unpack_composite(self, self.types['messageHeader'], buffer).value
 
-    def decode(self, buffer: Union[bytes, memoryview]):
+    def decode(self, buffer: Union[bytes, memoryview]) -> dict:
         buffer = memoryview(buffer)
 
         header = _unpack_composite(self, self.types['messageHeader'], buffer)
@@ -234,6 +369,33 @@ class Schema:
         vals = struct.unpack(format_str, buffer[body_offset:body_offset+body_size])
         _walk_fields(self, rv, m.fields, vals, Cursor())
         return DecodedMessage(m.name, header.value, rv)
+
+    def wrap(self, buf: Union[bytes, memoryview], header_only=False) -> WrappedMessage:
+        header = WrappedComposite('messageHeader', self.header_wrapper.pointers, buf, 0, self)
+        if header_only:
+            return WrappedMessage(buf, header, None)
+
+        m = self.messages[header['templateId']]
+        body = WrappedComposite(
+            m.name, self.message_wrappers[header['templateId']].pointers,
+            buf, self.header_size, self)
+        body.hydrate(self.header_size + header['blockLength'])
+
+        return WrappedMessage(buf, header, body)
+
+    def create_wrappers(self) -> WrappedMessage:
+        cursor = Cursor()
+
+        pointers = {}
+        _walk_fields_wrap_composite(self, pointers, self.types['messageHeader'], cursor)
+        self.header_wrapper = WrappedComposite('messageHeader', pointers, None, 0)
+        self.header_size = struct.calcsize(_unpack_format(self, self.types['messageHeader']))
+
+        for i, m in self.messages.items():
+            pointers = {}
+            cursor = Cursor()
+            _walk_fields_wrap(self, pointers, m.fields, cursor)
+            self.message_wrappers[i] = WrappedComposite(m.name, pointers, None, 0)
 
 
 def _unpack_format(
@@ -285,7 +447,7 @@ def _unpack_format(
         return prefix + ''.join(_unpack_format(schema, t, '', buffer, buffer_cursor) for t in type_.types)
 
 
-def _pack_format(schema: Schema, composite: Composite):
+def _pack_format(_schema: Schema, composite: Composite):
     fmt = []
     for t in composite.types:
         if t.length > 1 and t.primitiveType == PrimitiveType.CHAR:
@@ -296,7 +458,7 @@ def _pack_format(schema: Schema, composite: Composite):
     return ''.join(fmt)
 
 
-def _pack_composite(schema: Schema, composite: Composite, obj: dict):
+def _pack_composite(_schema: Schema, composite: Composite, obj: dict):
     fmt = []
     vals = []
     for t in composite.types:
@@ -337,7 +499,7 @@ def _unpack_composite(schema: Schema, composite: Composite, buffer: memoryview):
     return UnpackedValue(rv, size)
 
 
-def _prettify_type(schema: Schema, t: Type, v):
+def _prettify_type(_schema: Schema, t: Type, v):
     if t.primitiveType == PrimitiveType.CHAR and t.characterEncoding == CharacterEncoding.ASCII:
         return v.replace(b"\x00", b"").decode("ascii", errors='ignore').strip()
 
@@ -387,6 +549,93 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
         elif isinstance(f.type, PrimitiveType):
             fmt.append(FORMAT[f.type])
             vals.append(obj[f.name])
+            cursor.val += FORMAT_SIZES[f.type]
+
+        else:
+            assert 0
+
+
+def _walk_fields_wrap_composite(
+    schema: Schema, rv: Dict[str, Union[Pointer, WrappedGroup]],
+    composite: Composite, cursor: Cursor
+):
+    for t in composite.types:
+        if isinstance(t, Composite):
+            rv1 = {}
+            offset = cursor.val
+            _walk_fields_wrap_composite(schema, rv1, t, cursor)
+            rv[t.name] = WrappedComposite(t.name, rv1, None, offset)
+
+        else:
+            t1 = t.primitiveType
+            if t1 == PrimitiveType.CHAR and t.length > 1:
+                rv[t.name] = Pointer(cursor.val, str(t.length) + "s", t.length)
+                cursor.val += t.length
+            else:
+                rv[t.name] = Pointer(cursor.val, FORMAT[t1], FORMAT_SIZES[t1])
+                cursor.val += FORMAT_SIZES[t1]
+
+
+def _walk_fields_wrap(
+    schema: Schema, rv: Dict[str, Union[Pointer, WrappedGroup]],
+    fields: List[Union[Group, Field]], cursor: Cursor
+):
+    for f in fields:
+        if isinstance(f, Group):
+            num_in_group_offset = None
+            block_length_offset = None
+
+            cursor1 = Cursor()
+            for t in f.dimensionType.types:
+                if t.name == 'numInGroup':
+                    num_in_group_offset = cursor1.val
+
+                elif t.name == 'blockLength':
+                    block_length_offset = cursor1.val
+
+                cursor1.val += FORMAT_SIZES[t.primitiveType]
+
+            assert num_in_group_offset is not None
+            assert block_length_offset is not None
+
+            dimensionTypeTypes = {t.name: t for t in f.dimensionType.types}
+
+            rv1 = {}
+            _walk_fields_wrap(schema, rv1, f.fields, cursor1)
+            rv[f.name] = WrappedGroup(
+                None, f.name, -1, rv1, None,
+                Pointer(
+                    num_in_group_offset,
+                    FORMAT[dimensionTypeTypes['numInGroup'].primitiveType],
+                    FORMAT_SIZES[dimensionTypeTypes['numInGroup'].primitiveType],
+                ),
+                Pointer(
+                    block_length_offset,
+                    FORMAT[dimensionTypeTypes['blockLength'].primitiveType],
+                    FORMAT_SIZES[dimensionTypeTypes['blockLength'].primitiveType],
+                ),
+            )
+
+        elif isinstance(f.type, Type):
+            t = f.type.primitiveType
+            if t == PrimitiveType.CHAR and f.type.length > 1:
+                rv[f.name] = Pointer(cursor.val, str(f.type.length) + "s", f.type.length)
+                cursor.val += f.type.length
+            else:
+                rv[f.name] = Pointer(cursor.val, FORMAT[t], FORMAT_SIZES[t])
+                cursor.val += FORMAT_SIZES[t]
+
+        elif isinstance(f.type, Enum):
+            rv[f.name] = Pointer(
+                cursor.val,
+                FORMAT[PrimitiveType(f.type.encodingType.value)],
+                FORMAT_SIZES[PrimitiveType(f.type.encodingType.value)],
+            )
+            rv[f.name].enum = f.type
+            cursor.val += FORMAT_SIZES[PrimitiveType(f.type.encodingType.value)]
+
+        elif isinstance(f.type, PrimitiveType):
+            rv[f.name] = Pointer(cursor.val, FORMAT[f.type], FORMAT_SIZES[f.type])
             cursor.val += FORMAT_SIZES[f.type]
 
         else:
@@ -493,7 +742,13 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "enum":
             if action == "start":
                 attrs = dict(elem.items())
-                stack.append(Enum(name=attrs['name'], encodingType=EnumEncodingType(attrs['encodingType'])))
+
+                if attrs['encodingType'] in ENUM_ENCODING_TYPES:
+                    encoding_type = EnumEncodingType(attrs['encodingType'])
+                else:
+                    encoding_type = stack[0].types[attrs['encodingType']]
+
+                stack.append(Enum(name=attrs['name'], encodingType=encoding_type))
 
             elif action == "end":
                 x = stack.pop()
@@ -509,6 +764,32 @@ def _parse_schema(f: TextIO) -> Schema:
                 x = stack.pop()
                 assert isinstance(stack[-1], Enum)
                 stack[-1].valid_values.append(x)
+
+        elif tag == "set":
+            if action == "start":
+                attrs = dict(elem.items())
+
+                if attrs['encodingType'] in SET_ENCODING_TYPES:
+                    encoding_type = SetEncodingType(attrs['encodingType'])
+                else:
+                    encoding_type = stack[0].types[attrs['encodingType']]
+
+                stack.append(Set(name=attrs['name'], encodingType=encoding_type))
+
+            elif action == "end":
+                x = stack.pop()
+                assert isinstance(stack[-1], Schema)
+                stack[-1].types[x.name] = x
+
+        elif tag == "choice":
+            if action == "start":
+                attrs = dict(elem.items())
+                stack.append(SetChoice(name=attrs['name'], value=elem.text.strip()))
+
+            elif action == "end":
+                x = stack.pop()
+                assert isinstance(stack[-1], Set)
+                stack[-1].choices.append(x)
 
         elif tag == "field":
             if action == "start":

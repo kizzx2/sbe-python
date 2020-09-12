@@ -1,16 +1,18 @@
 # sbe-python
 
-Easy to use, pure Python FIX [SBE](https://www.fixtrading.org/standards/sbe/) encoder and decoder.
+Easy to use, fast, pure Python FIX [SBE](https://www.fixtrading.org/standards/sbe/) encoder and decoder.
 
 ## Install
 
 ```bash
-pip isntall sbe
+pip install sbe
 ```
 
 ## Usage
 
-### Decoding
+### Simple Decoding
+
+Decode SBE to Python dictionaries in one line. Good for exploratory data analysis.
 
 ```python
 import sbe
@@ -25,7 +27,6 @@ wtih open('your-data.sbe', 'rb') as f:
 x = schema.decode(buf)
 
 x.name  # The template message name
-# 'PriceFeed'
 
 x.value
 # {'userId': 11,
@@ -34,12 +35,58 @@ x.value
 # 'price': 5678.0,
 # ...
 
-# If you need an offset, apply them Pythonicaly
+# If you need an initial offset, apply it Pythonically
 schema.decode(buf[19:])
 
 # decode_header to avoid filter out messages based on header to avoid decoding
 # message bodies that are not needed
 schema.decode_header(buf)['templateId']
+```
+
+### High Performance Decoding (Wrapping)
+
+This gives you decent performance while still retaining high code readability.
+
+```python
+import sbe
+
+with open('your-schema.xml', 'r') as f:
+  schema = sbe.Schema.parse(f)
+
+wtih open('your-data.sbe', 'rb') as f:
+  buf = f.read()
+
+# Wrap the buffer without decoding it, fields are converted to Python variables
+# on demand
+x = schema.wrap(buf)
+
+x.header['templateId']
+x.body['price']
+x.body['someGroup'][2]['price']
+```
+
+### Direct Access with Pointers
+
+`get_raw_pointer` gives you the required information to unpack a variable from `bytes`. This gets you very close to the fastest achievable performance in Python:
+
+```python
+import sbe
+
+with open('your-schema.xml', 'r') as f:
+  schema = sbe.Schema.parse(f)
+
+header_pointer = schema.header_wrapper.get_raw_pointer('templateId')
+
+# Let's say we are only interested in messages of templateId == 3
+price_pointer = schema.message_wrappers[3].get_raw_pointer('price')
+
+wtih open('your-data.sbe', 'rb') as f:
+  buf = f.read()
+
+template_id = header_pointer.unpack(buf)  # calls buf[offset:offset+size].cast("I")[0] directly
+
+if template_id == 3:
+  print(price_pointer.unpack(buf))
 ```
 
 ### Encoding

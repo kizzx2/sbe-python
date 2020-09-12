@@ -106,17 +106,19 @@ class Pointer:
     is_group = False
     enum: Optional['Enum'] = None
 
-    def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite']):
-        rv = struct.unpack_from("<" + self.value, buf, self.offset + offset)[0]
-        if self.enum:
+    def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite'], raw=False):
+        start = self.offset + offset
+        end = start + self.size
+        rv = buf[start:end].cast(self.value)[0]
+        if not raw and self.enum:
             return self.enum.find_name_by_value(rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
-        elif self.value.endswith("s"):
+        elif not raw and self.value.endswith("s"):
             return rv.replace(b"\x00", b"").decode('ascii', errors='ignore').strip()
         else:
             return rv
 
     def unpack(self, buf: memoryview):
-        return self.return_value(buf, 0, None)
+        return self.return_value(buf, 0, None, raw=True)
 
     def __repr__(self):
         if self.enum:
@@ -275,13 +277,13 @@ class WrappedGroup:
         return self
 
     def hydrate(self):
-        self.numInGroup = struct.unpack_from(
-            "<" + self.num_in_group_pointer.value, self.buf,
-            self.offset + self.num_in_group_pointer.offset)[0]
+        start = self.offset + self.num_in_group_pointer.offset
+        end = start + self.num_in_group_pointer.size
+        self.numInGroup = self.buf[start:end].cast(self.num_in_group_pointer.value)[0]
 
-        self.blockLength = struct.unpack_from(
-            "<" + self.block_length_pointer.value, self.buf,
-            self.offset + self.block_length_pointer.offset)[0]
+        start = self.offset + self.block_length_pointer.offset
+        end = start + self.block_length_pointer.size
+        self.blockLength = self.buf[start:end].cast(self.block_length_pointer.value)[0]
 
     def __getitem__(self, i: int):
         offset = self.offset + self.blockLength * i

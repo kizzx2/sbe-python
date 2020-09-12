@@ -59,6 +59,8 @@ class UnpackedValue:
     value: dict
     size: int
 
+    __slots__ = ('value', 'size')
+
     def __repr__(self):
         return self.value.__repr__()
 
@@ -69,16 +71,29 @@ class DecodedMessage:
     header: dict
     value: dict
 
+    __slots__ = ('message_name', 'header', 'value')
 
-@dataclass
+
+@dataclass(init=False)
 class Type:
+    __slots__ = (
+        'name', 'primitiveType', 'presence', 'semanticType',
+        'description', 'length', 'characterEncoding')
+
     name: str
     primitiveType: PrimitiveType
-    presence = Presence.REQUIRED
-    semanticType: Optional[str] = None
-    description: Optional[str] = None
-    length = 1
-    characterEncoding: Optional[CharacterEncoding] = None
+    presence: Presence
+    semanticType: Optional[str]
+    description: Optional[str]
+    length: int
+    characterEncoding: Optional[CharacterEncoding]
+
+    def __init__(self, name: str, primitiveType: PrimitiveType):
+        super().__init__()
+        self.name = name
+        self.primitiveType = primitiveType
+        self.presence = Presence.REQUIRED
+        self.length = 1
 
     def __repr__(self):
         rv = self.name + " ("
@@ -94,6 +109,8 @@ class EnumValue:
     name: str
     value: str
 
+    __slots__ = ('name', 'value')
+
     def __repr__(self):
         return (self.name, self.value).__repr__()
 
@@ -103,8 +120,17 @@ class Pointer:
     offset: int
     value: Union[FormatString, Dict[str, 'Pointer']]
     size: int
-    is_group = False
-    enum: Optional['Enum'] = None
+    is_group: bool
+    enum: Optional['Enum']
+
+    __slots__ = ('offset', 'value', 'size', 'is_group', 'enum')
+
+    def __init__(self, offset: int, value: Union[FormatString, Dict[str, 'Pointer']], size: int):
+        self.offset = offset
+        self.value = value
+        self.size = size
+        self.is_group = False
+        self.enum = None
 
     def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite']):
         start = self.offset + offset
@@ -134,6 +160,8 @@ class Pointer:
 class SetChoice:
     name: str
     value: str
+
+    __slots__ = ('name', 'value')
 
     def __repr__(self):
         return (self.name, self.value).__repr__()
@@ -181,13 +209,22 @@ class Set:
         return f"<Set '{self.name}'>"
 
 
-@dataclass
+@dataclass(init=False)
 class Field:
     name: str
     id: str
     type: Union[PrimitiveType, str]
-    description: Optional[str] = None
-    sinceVersion: int = 0
+    description: Optional[str]
+    sinceVersion: int
+
+    def __init__(self, name: str, id: str, type: Union[PrimitiveType, str]):
+        self.name = name
+        self.id = id
+        self.type = type
+        self.description = None
+        self.sinceVersion = 0
+
+    __slots__ = ('name', 'id', 'type', 'description', 'sinceVersion')
 
     def __repr__(self):
         if isinstance(self.type, PrimitiveType):
@@ -213,14 +250,30 @@ class Message:
     fields: List[Union[Group, Field]] = field(default_factory=list, repr=False)
 
 
-@dataclass
+@dataclass(init=False)
 class WrappedComposite:
     name: str
     pointers: Dict[str, Union[Pointer, 'WrappedComposite', 'WrappedGroup']]
     buf: Optional[memoryview]
     offset: int
-    schema: Optional['Schema'] = None
-    hydrated = False
+    schema: Optional['Schema']
+    hydrated: bool
+
+    def __init__(
+        self,
+        name: str,
+        pointers:  Dict[str, Union[Pointer, 'WrappedComposite', 'WrappedGroup']],
+        buf: Optional[memoryview],
+        offset: int,
+        schema: Optional['Schema'] = None,
+    ):
+        self.name = name
+        self.pointers = pointers
+        self.buf = buf
+        self.offset = offset
+        self.schema = schema
+
+    __slots__ = ('name', 'pointers', 'buf', 'offset', 'schema', 'hydrated')
 
     def hydrate(self, offset: int):
         cursor = offset
@@ -255,12 +308,13 @@ class WrappedComposite:
 @dataclass
 class WrappedMessage:
     buf: memoryview
-
     header: WrappedComposite
     body: Optional[WrappedComposite]
 
+    __slots__ = ('buf', 'header', 'body')
 
-@dataclass
+
+@dataclass(init=False)
 class WrappedGroup:
     buf: Optional[memoryview]
     name: str
@@ -271,8 +325,34 @@ class WrappedGroup:
     num_in_group_pointer: Pointer
     block_length_pointer: Pointer
 
-    numInGroup = 0
-    blockLength = 0
+    numInGroup: int
+    blockLength: int
+
+    __slots__ = (
+        'buf', 'name', 'offset', 'pointers', 'schema',
+        'num_in_group_pointer', 'block_length_pointer', 'numInGroup',
+        'blockLength'
+    )
+
+    def __init__(
+        self,
+        buf: Optional[memoryview],
+        name: str,
+        offset: int,
+        pointers: Dict[str, Union[Pointer, 'WrappedGroup']],
+        schema: Optional['Schema'],
+        num_in_group_pointer: Pointer,
+        block_length_pointer: Pointer,
+    ):
+        self.buf = buf
+        self.name = name
+        self.offset = offset
+        self.pointers = pointers
+        self.schema = schema
+        self.num_in_group_pointer = num_in_group_pointer
+        self.block_length_pointer = block_length_pointer
+        self.numInGroup = 0
+        self.blockLength = 0
 
     def return_value(self, _buf: memoryview, _offset: int, _schema: Optional['Schema']):
         return self
@@ -303,7 +383,8 @@ class WrappedGroup:
 
 @dataclass
 class Cursor:
-    val: int = 0
+    val: int
+    __slots__ = ('val',)
 
 
 @dataclass
@@ -329,7 +410,7 @@ class Schema:
 
         fmts = []
         vals = []
-        cursor = Cursor()
+        cursor = Cursor(0)
 
         _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
         fmt = "<" + ''.join(fmts)
@@ -359,7 +440,7 @@ class Schema:
 
         m = self.messages[header.value['templateId']]
 
-        cursor = Cursor()
+        cursor = Cursor(0)
         format_str_parts = []
         for f in m.fields:
             if isinstance(f, Group):
@@ -374,7 +455,7 @@ class Schema:
 
         rv = {}
         vals = struct.unpack(format_str, buffer[body_offset:body_offset+body_size])
-        _walk_fields(self, rv, m.fields, vals, Cursor())
+        _walk_fields_decode(self, rv, m.fields, vals, Cursor(0))
         return DecodedMessage(m.name, header.value, rv)
 
     def wrap(self, buf: Union[bytes, memoryview], header_only=False) -> WrappedMessage:
@@ -391,7 +472,7 @@ class Schema:
         return WrappedMessage(buf, header, body)
 
     def create_wrappers(self) -> WrappedMessage:
-        cursor = Cursor()
+        cursor = Cursor(0)
 
         pointers = {}
         _walk_fields_wrap_composite(self, pointers, self.types['messageHeader'], cursor)
@@ -400,7 +481,7 @@ class Schema:
 
         for i, m in self.messages.items():
             pointers = {}
-            cursor = Cursor()
+            cursor = Cursor(0)
             _walk_fields_wrap(self, pointers, m.fields, cursor)
             self.message_wrappers[i] = WrappedComposite(m.name, pointers, None, 0)
 
@@ -522,7 +603,7 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             vals1 = []
             block_length = None
             for x in xs:
-                _walk_fields_encode(schema, f.fields, x, fmt1, vals1, Cursor())
+                _walk_fields_encode(schema, f.fields, x, fmt1, vals1, Cursor(0))
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
 
@@ -592,7 +673,7 @@ def _walk_fields_wrap(
             num_in_group_offset = None
             block_length_offset = None
 
-            cursor1 = Cursor()
+            cursor1 = Cursor(0)
             for t in f.dimensionType.types:
                 if t.name == 'numInGroup':
                     num_in_group_offset = cursor1.val
@@ -649,7 +730,7 @@ def _walk_fields_wrap(
             assert 0
 
 
-def _walk_fields(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
+def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
             num_in_group = vals[cursor.val + 1]
@@ -658,7 +739,7 @@ def _walk_fields(schema: Schema, rv: dict, fields: List[Union[Group, Field]], va
             rv[f.name] = []
             for _ in range(num_in_group):
                 rv1 = {}
-                _walk_fields(schema, rv1, f.fields, vals, cursor)
+                _walk_fields_decode(schema, rv1, f.fields, vals, cursor)
                 rv[f.name].append(rv1)
 
         elif isinstance(f.type, Type):

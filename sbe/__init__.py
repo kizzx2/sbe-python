@@ -106,19 +106,20 @@ class Pointer:
     is_group = False
     enum: Optional['Enum'] = None
 
-    def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite'], raw=False):
+    def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite']):
         start = self.offset + offset
         end = start + self.size
         rv = buf[start:end].cast(self.value)[0]
-        if not raw and self.enum:
+
+        if self.enum:
             return self.enum.find_name_by_value(rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
-        elif not raw and self.value.endswith("s"):
+        elif self.value.endswith("s"):
             return rv.replace(b"\x00", b"").decode('ascii', errors='ignore').strip()
-        else:
-            return rv
+
+        return rv
 
     def unpack(self, buf: memoryview):
-        return self.return_value(buf, 0, None, raw=True)
+        return buf[self.offset:self.offset+self.size].cast(self.value)[0]
 
     def __repr__(self):
         if self.enum:

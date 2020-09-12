@@ -290,6 +290,10 @@ class WrappedGroup:
     def __repr__(self):
         return f"<WrappedGroup '{self.name}' numInGroup={self.numInGroup}>"
 
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
     def __len__(self):
         return self.numInGroup
 

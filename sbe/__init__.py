@@ -135,6 +135,15 @@ class Pointer:
     def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite']):
         start = self.offset + offset
         end = start + self.size
+
+        if isinstance(self.value, WrappedComposite):
+            if self.value.buf is None:
+                self.value.buf = buf
+                self.value.offset = offset
+                self.value.hydrate(offset)
+
+            return self.value
+
         rv = buf[start:end].cast(self.value)[0]
 
         if self.enum:
@@ -460,6 +469,8 @@ class Schema:
         return DecodedMessage(m.name, header.value, rv)
 
     def wrap(self, buf: Union[bytes, memoryview], header_only=False) -> WrappedMessage:
+        buf = memoryview(buf)
+
         header = WrappedComposite('messageHeader', self.header_wrapper.pointers, buf, 0, self)
         if header_only:
             return WrappedMessage(buf, header, None)
@@ -594,6 +605,24 @@ def _prettify_type(_schema: Schema, t: Type, v):
 
     return v
 
+def _walk_fields_encode_composite(
+    schema: Schema, composite: Composite,
+    obj: dict, fmt: list, vals: list, cursor: Cursor
+):
+    for t in composite.types:
+        if isinstance(t, Composite):
+            _walk_fields_encode_composite(schema, t, obj[t.name], fmt, vals, cursor)
+
+        else:
+            t1 = t.primitiveType
+            if t1 == PrimitiveType.CHAR and t.length > 1:
+                fmt.append(str(t.length) + "s")
+                vals.append(obj[t.name].encode())
+                cursor.val += t.type.length
+            else:
+                fmt.append(FORMAT[t1])
+                vals.append(obj[t.name])
+                cursor.val += FORMAT_SIZES[t1]
 
 def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
     for f in fields:
@@ -618,6 +647,9 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             fmt.extend(fmt1)
             vals.extend(vals1)
             # cursor.val += struct.calcsize("<" + dimension_fmt) + block_length
+
+        elif isinstance(f.type, Composite):
+            _walk_fields_encode_composite(schema, f.type, obj[f.name], fmt, vals, cursor)
 
         elif isinstance(f.type, Type):
             t = f.type.primitiveType
@@ -705,6 +737,14 @@ def _walk_fields_wrap(
                 ),
             )
 
+        elif isinstance(f.type, Composite):
+            rv1 = {}
+            cursor0 = cursor.val
+            _walk_fields_wrap_composite(schema, rv1, f.type, cursor)
+            rv[f.name] = Pointer(
+                cursor.val, WrappedComposite(f.name, rv1, None, cursor0),
+                cursor.val - cursor0)
+
         elif isinstance(f.type, Type):
             t = f.type.primitiveType
             if t == PrimitiveType.CHAR and f.type.length > 1:
@@ -731,6 +771,36 @@ def _walk_fields_wrap(
             assert 0
 
 
+def _walk_fields_decode_composite(schema: Schema, rv: dict, composite: Composite, vals: List, cursor: Cursor):
+    for t in composite.types:
+        if isinstance(t, Composite):
+            rv[t.name] = {}
+            _walk_fields_decode_composite(schema, rv[t.name], t, vals, cursor)
+
+        elif isinstance(t, Type):
+            rv[t.name] = _prettify_type(schema, t, vals[cursor.val])
+            cursor.val += 1
+
+        elif isinstance(t, Enum):
+            v = vals[cursor.val]
+            cursor.val += 1
+
+            if isinstance(v, bytes):
+                if v == b'\x00':
+                    rv[t.name] = v
+                else:
+                    rv[t.name] = t.find_name_by_value(v.decode("ascii", errors='ignore'))
+            else:
+                rv[t.name] = t.find_name_by_value(str(v))
+
+        elif isinstance(t, PrimitiveType):
+            v = vals[cursor.val]
+            cursor.val += 1
+            rv[t.name] = v
+
+        else:
+            assert 0
+
 def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
@@ -742,6 +812,10 @@ def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Fiel
                 rv1 = {}
                 _walk_fields_decode(schema, rv1, f.fields, vals, cursor)
                 rv[f.name].append(rv1)
+
+        elif isinstance(f.type, Composite):
+            rv[f.name] = {}
+            _walk_fields_decode_composite(schema, rv[f.name], f.type, vals, cursor)
 
         elif isinstance(f.type, Type):
             rv[f.name] = _prettify_type(schema, f.type, vals[cursor.val])

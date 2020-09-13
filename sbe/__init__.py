@@ -137,7 +137,7 @@ class Pointer:
         end = start + self.size
 
         if isinstance(self.value, WrappedComposite):
-            if self.value.buf is None:
+            if self.value.offset != offset:
                 self.value.buf = buf
                 self.value.offset = offset
                 self.value.hydrate(offset)
@@ -160,6 +160,8 @@ class Pointer:
     def __repr__(self):
         if self.enum:
             return f"{self.enum.name}@{self.offset}"
+        elif isinstance(self.value, WrappedComposite):
+            return f"{self.value.name}@{self.offset}"
         elif self.value in FORMAT_TO_TYPE:
             return f"{FORMAT_TO_TYPE[self.value].value}@{self.offset}"
         else:

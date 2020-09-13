@@ -8,7 +8,7 @@ setuptools.setup(
     long_description=open('README.md', 'r').read(),
     long_description_content_type='text/markdown',
     url="https://github.com/kizzx2/sbe-python",
-    install_requires=["lxml"],
+    install_requires=["lxml", "bitstring"],
     packages=setuptools.find_packages(),
     include_package_data=True,
 )

@@ -1,8 +1,9 @@
 import enum
 import struct
 from dataclasses import dataclass, field
-from typing import Dict, List, NewType, Optional, TextIO, Union
+from typing import Dict, Iterable, List, NewType, Optional, TextIO, Union
 
+import bitstring
 import lxml
 import lxml.etree
 
@@ -122,8 +123,9 @@ class Pointer:
     size: int
     is_group: bool
     enum: Optional['Enum']
+    set_: Optional['Set']
 
-    __slots__ = ('offset', 'value', 'size', 'is_group', 'enum')
+    __slots__ = ('offset', 'value', 'size', 'is_group', 'enum', 'set_')
 
     def __init__(self, offset: int, value: Union[FormatString, Dict[str, 'Pointer']], size: int):
         self.offset = offset
@@ -131,6 +133,7 @@ class Pointer:
         self.size = size
         self.is_group = False
         self.enum = None
+        self.set_ = None
 
     def return_value(self, buf: memoryview, offset: int, _parent: Optional['WrappedComposite']):
         start = self.offset + offset
@@ -148,6 +151,9 @@ class Pointer:
 
         if self.enum:
             return self.enum.find_name_by_value(
+                rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
+        elif self.set_:
+            return self.set_.find_name_by_value(
                 rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
         elif self.value.endswith("s"):
             return rv.replace(b"\x00", b"").decode('ascii', errors='ignore').strip()
@@ -171,7 +177,7 @@ class Pointer:
 @dataclass
 class SetChoice:
     name: str
-    value: str
+    value: int
 
     __slots__ = ('name', 'value')
 
@@ -217,6 +223,19 @@ class Set:
     description: Optional[str] = None
     choices: List[SetChoice] = field(default_factory=list)
 
+    def encode(self, vals: Iterable[str]) -> int:
+        vals = set(vals)
+        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).int
+
+    def decode(self, val: int) -> List[str]:
+        if isinstance(self.encodingType, SetEncodingType):
+            length = FORMAT_SIZES[PrimitiveType[self.encodingType.value]] * 8
+        else:
+            length = FORMAT_SIZES[self.encodingType.primitiveType] * 8
+
+        bits = bitstring.Bits(uint=val, length=length)
+        return [self.choices[i].name for i, v in enumerate(bits) if v]
+
     def __repr__(self):
         return f"<Set '{self.name}'>"
 
@@ -225,7 +244,7 @@ class Set:
 class Field:
     name: str
     id: str
-    type: Union[PrimitiveType, str]
+    type: Union[PrimitiveType, Set, Enum]
     description: Optional[str]
     sinceVersion: int
 
@@ -539,10 +558,17 @@ def _unpack_format(
             return prefix + FORMAT[type_.primitiveType]
 
     elif isinstance(type_, (Set, Enum)):
-        if type_.encodingType.value in PRIMITIVE_TYPES:
-            if buffer_cursor:
-                buffer_cursor.val += FORMAT_SIZES[PrimitiveType(type_.encodingType.value)]
-            return prefix + FORMAT[PrimitiveType(type_.encodingType.value)]
+        if isinstance(type_.encodingType, PrimitiveType):
+            if type_.encodingType.value in PRIMITIVE_TYPES:
+                if buffer_cursor:
+                    buffer_cursor.val += FORMAT_SIZES[PrimitiveType(type_.encodingType.value)]
+                return prefix + FORMAT[PrimitiveType(type_.encodingType.value)]
+        elif isinstance(type_.encodingType.primitiveType, PrimitiveType):
+            if type_.encodingType.primitiveType.value in PRIMITIVE_TYPES:
+                if buffer_cursor:
+                    buffer_cursor.val += FORMAT_SIZES[PrimitiveType(type_.encodingType.primitiveType.value)]
+                return prefix + FORMAT[PrimitiveType(type_.encodingType.primitiveType.value)]
+
         return _unpack_format(schema, type_.encodingType, '', buffer, buffer_cursor)
 
     elif isinstance(type_, Composite):
@@ -607,6 +633,7 @@ def _prettify_type(_schema: Schema, t: Type, v):
 
     return v
 
+
 def _walk_fields_encode_composite(
     schema: Schema, composite: Composite,
     obj: dict, fmt: list, vals: list, cursor: Cursor
@@ -625,6 +652,7 @@ def _walk_fields_encode_composite(
                 fmt.append(FORMAT[t1])
                 vals.append(obj[t.name])
                 cursor.val += FORMAT_SIZES[t1]
+
 
 def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
     for f in fields:
@@ -664,10 +692,25 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 vals.append(obj[f.name])
                 cursor.val += FORMAT_SIZES[t]
 
+        elif isinstance(f.type, Set):
+            if isinstance(f.type.encodingType, PrimitiveType):
+                encoding_primitive_type = PrimitiveType(f.type.encodingType.value)
+            else:
+                encoding_primitive_type = PrimitiveType(f.type.encodingType.primitiveType.value)
+
+            fmt.append(FORMAT[encoding_primitive_type])
+            vals.append(f.type.encode(obj[f.name]))
+            cursor.val += FORMAT_SIZES[encoding_primitive_type]
+
         elif isinstance(f.type, Enum):
-            fmt.append(FORMAT[PrimitiveType(f.type.encodingType.value)])
+            if isinstance(f.type.encodingType, Type):
+                encoding_primitive_type = f.type.encodingType.primitiveType
+            else:
+                encoding_primitive_type = PrimitiveType(f.type.encodingType.value)
+
+            fmt.append(FORMAT[encoding_primitive_type])
             vals.append(f.type.find_value_by_name(obj[f.name]))
-            cursor.val += FORMAT_SIZES[PrimitiveType(f.type.encodingType.value)]
+            cursor.val += FORMAT_SIZES[encoding_primitive_type]
 
         elif isinstance(f.type, PrimitiveType):
             fmt.append(FORMAT[f.type])
@@ -757,13 +800,32 @@ def _walk_fields_wrap(
                 cursor.val += FORMAT_SIZES[t]
 
         elif isinstance(f.type, Enum):
+            if isinstance(f.type.encodingType, Type):
+                encodingPrimitiveType = f.type.encodingType.primitiveType.value
+            else:
+                encodingPrimitiveType = f.type.encodingType.value
+
             rv[f.name] = Pointer(
                 cursor.val,
-                FORMAT[PrimitiveType(f.type.encodingType.value)],
-                FORMAT_SIZES[PrimitiveType(f.type.encodingType.value)],
+                FORMAT[PrimitiveType(encodingPrimitiveType)],
+                FORMAT_SIZES[PrimitiveType(encodingPrimitiveType)],
             )
             rv[f.name].enum = f.type
-            cursor.val += FORMAT_SIZES[PrimitiveType(f.type.encodingType.value)]
+            cursor.val += FORMAT_SIZES[PrimitiveType(encodingPrimitiveType)]
+
+        elif isinstance(f.type, Set):
+            if isinstance(f.type.encodingType, Type):
+                encodingPrimitiveType = f.type.encodingType.primitiveType.value
+            else:
+                encodingPrimitiveType = f.type.encodingType.value
+
+            rv[f.name] = Pointer(
+                cursor.val,
+                FORMAT[PrimitiveType(encodingPrimitiveType)],
+                FORMAT_SIZES[PrimitiveType(encodingPrimitiveType)],
+            )
+            rv[f.name].set_ = f.type
+            cursor.val += FORMAT_SIZES[PrimitiveType(encodingPrimitiveType)]
 
         elif isinstance(f.type, PrimitiveType):
             rv[f.name] = Pointer(cursor.val, FORMAT[f.type], FORMAT_SIZES[f.type])
@@ -773,35 +835,48 @@ def _walk_fields_wrap(
             assert 0
 
 
-def _walk_fields_decode_composite(schema: Schema, rv: dict, composite: Composite, vals: List, cursor: Cursor):
+def _decode_value(
+    schema: Schema, rv: dict, name: str, t: Union[Type, Set, Enum, PrimitiveType], vals: list, cursor: Cursor
+):
+    if isinstance(t, Type):
+        rv[name] = _prettify_type(schema, t, vals[cursor.val])
+        cursor.val += 1
+
+    elif isinstance(t, Set):
+        v = vals[cursor.val]
+        cursor.val += 1
+        rv[name] = t.decode(v)
+
+    elif isinstance(t, Enum):
+        v = vals[cursor.val]
+        cursor.val += 1
+
+        if isinstance(v, bytes):
+            if v == b'\x00':
+                rv[name] = v
+            else:
+                rv[name] = t.find_name_by_value(v.decode("ascii", errors='ignore'))
+        else:
+            rv[name] = t.find_name_by_value(str(v))
+
+    elif isinstance(t, PrimitiveType):
+        v = vals[cursor.val]
+        cursor.val += 1
+        rv[name] = v
+
+    else:
+        assert 0
+
+
+def _walk_fields_decode_composite(schema: Schema, rv: dict, composite: Composite, vals: list, cursor: Cursor):
     for t in composite.types:
         if isinstance(t, Composite):
             rv[t.name] = {}
             _walk_fields_decode_composite(schema, rv[t.name], t, vals, cursor)
 
-        elif isinstance(t, Type):
-            rv[t.name] = _prettify_type(schema, t, vals[cursor.val])
-            cursor.val += 1
-
-        elif isinstance(t, Enum):
-            v = vals[cursor.val]
-            cursor.val += 1
-
-            if isinstance(v, bytes):
-                if v == b'\x00':
-                    rv[t.name] = v
-                else:
-                    rv[t.name] = t.find_name_by_value(v.decode("ascii", errors='ignore'))
-            else:
-                rv[t.name] = t.find_name_by_value(str(v))
-
-        elif isinstance(t, PrimitiveType):
-            v = vals[cursor.val]
-            cursor.val += 1
-            rv[t.name] = v
-
         else:
-            assert 0
+            _decode_value(schema, rv, t.name, t, vals, cursor)
+
 
 def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
     for f in fields:
@@ -819,29 +894,8 @@ def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Fiel
             rv[f.name] = {}
             _walk_fields_decode_composite(schema, rv[f.name], f.type, vals, cursor)
 
-        elif isinstance(f.type, Type):
-            rv[f.name] = _prettify_type(schema, f.type, vals[cursor.val])
-            cursor.val += 1
-
-        elif isinstance(f.type, Enum):
-            v = vals[cursor.val]
-            cursor.val += 1
-
-            if isinstance(v, bytes):
-                if v == b'\x00':
-                    rv[f.name] = v
-                else:
-                    rv[f.name] = f.type.find_name_by_value(v.decode("ascii", errors='ignore'))
-            else:
-                rv[f.name] = f.type.find_name_by_value(str(v))
-
-        elif isinstance(f.type, PrimitiveType):
-            v = vals[cursor.val]
-            cursor.val += 1
-            rv[f.name] = v
-
         else:
-            assert 0
+            _decode_value(schema, rv, f.name, f.type, vals, cursor)
 
 
 def _parse_schema(f: TextIO) -> Schema:
@@ -944,6 +998,7 @@ def _parse_schema(f: TextIO) -> Schema:
             elif action == "end":
                 x = stack.pop()
                 assert isinstance(stack[-1], Schema)
+                x.choices = sorted(x.choices, key=lambda y: int(y.value))
                 stack[-1].types[x.name] = x
 
         elif tag == "choice":

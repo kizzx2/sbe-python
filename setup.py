@@ -6,7 +6,7 @@ with open("README.md", "r") as f:
 
 setuptools.setup(
     name="sbe",
-    version="0.2.0",
+    version="0.2.1",
     author="Chris Yuen",
     author_email="chris@kizzx2.com",
     long_description=open('README.md', 'r').read(),

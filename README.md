@@ -67,7 +67,7 @@ x.body['someGroup'][2]['price']
 
 ### Direct Access with Pointers
 
-`get_raw_pointer` gives you the required information to unpack a variable from `bytes`. This gets you very close to the fastest achievable performance in Python:
+`get_raw_pointer` gives you the required information to unpack a variable from `memoryview` / `bytes`. This gets you very close to the fastest achievable performance in Python:
 
 ```python
 import sbe
@@ -83,6 +83,8 @@ price_pointer = schema.message_wrappers[3].get_raw_pointer('price')
 wtih open('your-data.sbe', 'rb') as f:
   buf = f.read()
 
+# pass `memoryview` to `unpack` to avoid copying
+buf = memoryview(buf)[initial_offset:]
 template_id = header_pointer.unpack(buf)  # calls buf[offset:offset+size].cast("I")[0] directly
 
 if template_id == 3:

@@ -1,12 +1,8 @@
 import setuptools
 
-with open("README.md", "r") as f:
-    long_description = f.read()
-
-
 setuptools.setup(
     name="sbe",
-    version="0.2.1",
+    version="0.2.2",
     author="Chris Yuen",
     author_email="chris@kizzx2.com",
     long_description=open('README.md', 'r').read(),

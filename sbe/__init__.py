@@ -138,7 +138,8 @@ class Pointer:
         rv = buf[start:end].cast(self.value)[0]
 
         if self.enum:
-            return self.enum.find_name_by_value(rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
+            return self.enum.find_name_by_value(
+                rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
         elif self.value.endswith("s"):
             return rv.replace(b"\x00", b"").decode('ascii', errors='ignore').strip()
 
@@ -217,10 +218,10 @@ class Field:
     description: Optional[str]
     sinceVersion: int
 
-    def __init__(self, name: str, id: str, type: Union[PrimitiveType, str]):
+    def __init__(self, name: str, id_: str, type_: Union[PrimitiveType, str]):
         self.name = name
-        self.id = id
-        self.type = type
+        self.id = id_
+        self.type = type_
         self.description = None
         self.sinceVersion = 0
 
@@ -890,7 +891,7 @@ def _parse_schema(f: TextIO) -> Schema:
                     field_type = stack[0].types[attrs['type']]
 
                 assert isinstance(stack[-1], (Group, Message))
-                stack[-1].fields.append(Field(name=attrs['name'], id=attrs['id'], type=field_type))
+                stack[-1].fields.append(Field(name=attrs['name'], id_=attrs['id'], type_=field_type))
 
         elif tag == "message":
             if action == "start":

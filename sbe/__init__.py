@@ -558,7 +558,7 @@ def _unpack_format(
             return prefix + FORMAT[type_.primitiveType]
 
     elif isinstance(type_, (Set, Enum)):
-        if isinstance(type_.encodingType, PrimitiveType):
+        if isinstance(type_.encodingType, (PrimitiveType, EnumEncodingType)):
             if type_.encodingType.value in PRIMITIVE_TYPES:
                 if buffer_cursor:
                     buffer_cursor.val += FORMAT_SIZES[PrimitiveType(type_.encodingType.value)]
@@ -693,7 +693,7 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 cursor.val += FORMAT_SIZES[t]
 
         elif isinstance(f.type, Set):
-            if isinstance(f.type.encodingType, PrimitiveType):
+            if isinstance(f.type.encodingType, (PrimitiveType, SetEncodingType)):
                 encoding_primitive_type = PrimitiveType(f.type.encodingType.value)
             else:
                 encoding_primitive_type = PrimitiveType(f.type.encodingType.primitiveType.value)

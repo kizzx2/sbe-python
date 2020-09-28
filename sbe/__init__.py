@@ -147,7 +147,10 @@ class Pointer:
 
             return self.value
 
-        rv = buf[start:end].cast(self.value)[0]
+        if self.value.endswith("s"):
+            rv = buf[start:end].tobytes()
+        else:
+            rv = buf[start:end].cast(self.value)[0]
 
         if self.enum:
             return self.enum.find_name_by_value(
@@ -161,6 +164,9 @@ class Pointer:
         return rv
 
     def unpack(self, buf: memoryview):
+        if self.value[-1] == 's':
+            return buf[self.offset:self.offset+self.size].tobytes()
+
         return buf[self.offset:self.offset+self.size].cast(self.value)[0]
 
     def __repr__(self):

@@ -485,7 +485,9 @@ class Schema:
                 if cursor.val < header.value['blockLength']:
                     format_str_parts.append(str(header.value['blockLength'] - cursor.val) + 'x')
                 cursor.val = header.value['blockLength']
-            format_str_parts.append(_unpack_format(self, f, '', buffer[body_offset:], cursor))
+            part = _unpack_format(self, f, '', buffer[body_offset:], cursor)
+            if part:
+                format_str_parts.append(part)
         format_str = '<' + ''.join(format_str_parts)
 
         body_size = struct.calcsize(format_str)
@@ -539,6 +541,9 @@ def _unpack_format(
         return _unpack_format(schema, type_.type, '', buffer, buffer_cursor)
 
     elif isinstance(type_, Group):
+        if len(buffer[buffer_cursor.val:]) == 0:
+            return None
+
         dimension = _unpack_composite(schema, type_.dimensionType, buffer[buffer_cursor.val:])
         buffer_cursor.val += dimension.size
 
@@ -887,7 +892,10 @@ def _walk_fields_decode_composite(schema: Schema, rv: dict, composite: Composite
 def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
-            num_in_group = vals[cursor.val + 1]
+            if len(vals) >= cursor.val + 1:
+                num_in_group = vals[cursor.val + 1]
+            else:
+                num_in_group = 0
             cursor.val += 2
 
             rv[f.name] = []

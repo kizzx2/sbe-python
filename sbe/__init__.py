@@ -95,6 +95,7 @@ class Type:
         self.primitiveType = primitiveType
         self.presence = Presence.REQUIRED
         self.length = 1
+        self.characterEncoding = None
 
     def __repr__(self):
         rv = self.name + " ("
@@ -639,7 +640,9 @@ def _unpack_composite(schema: Schema, composite: Composite, buffer: memoryview):
 
 
 def _prettify_type(_schema: Schema, t: Type, v):
-    if t.primitiveType == PrimitiveType.CHAR and t.characterEncoding == CharacterEncoding.ASCII:
+    if t.primitiveType == PrimitiveType.CHAR and (
+        t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
+    ):
         return v.replace(b"\x00", b"").decode("ascii", errors='ignore').strip()
 
     return v
@@ -658,7 +661,7 @@ def _walk_fields_encode_composite(
             if t1 == PrimitiveType.CHAR and t.length > 1:
                 fmt.append(str(t.length) + "s")
                 vals.append(obj[t.name].encode())
-                cursor.val += t.type.length
+                cursor.val += t.length
             else:
                 fmt.append(FORMAT[t1])
                 vals.append(obj[t.name])

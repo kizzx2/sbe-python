@@ -7,7 +7,6 @@ import bitstring
 import lxml
 import lxml.etree
 
-
 class PrimitiveType(enum.Enum):
     CHAR = 'char'
     UINT8 = 'uint8'
@@ -31,6 +30,7 @@ class SetEncodingType(enum.Enum):
 
 class EnumEncodingType(enum.Enum):
     UINT8 = 'uint8'
+    UINT16 = 'uint16'
     CHAR = 'char'
 
 
@@ -202,7 +202,7 @@ class Enum:
     valid_values: List[EnumValue] = field(default_factory=list)
 
     def find_value_by_name(self, name: str) -> str:
-        return int(next(x for x in self.valid_values if x.name == name).value)
+        return (next(x for x in self.valid_values if x.name == name).value).encode() if self.encodingType == EnumEncodingType.CHAR else int(next(x for x in self.valid_values if x.name == name).value)
 
     def find_name_by_value(self, val: str) -> str:
         return next(x for x in self.valid_values if x.value == val).name
@@ -232,7 +232,7 @@ class Set:
 
     def encode(self, vals: Iterable[str]) -> int:
         vals = set(vals)
-        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).int
+        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).uint
 
     def decode(self, val: int) -> List[str]:
         if isinstance(self.encodingType, SetEncodingType):
@@ -449,7 +449,6 @@ class Schema:
         fmts = []
         vals = []
         cursor = Cursor(0)
-
         _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
         fmt = "<" + ''.join(fmts)
 
@@ -460,7 +459,6 @@ class Schema:
             'version': int(self.version),
             'blockLength': cursor.val,
         }
-
         return b''.join([
             _pack_composite(self, self.types['messageHeader'], header),
             struct.pack(fmt, *vals)
@@ -638,7 +636,6 @@ def _unpack_composite(schema: Schema, composite: Composite, buffer: memoryview):
 
     return UnpackedValue(rv, size)
 
-
 def _prettify_type(_schema: Schema, t: Type, v):
     if t.primitiveType == PrimitiveType.CHAR and (
         t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
@@ -703,7 +700,7 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 cursor.val += f.type.length
             else:
                 fmt.append(FORMAT[t])
-                vals.append(obj[f.name])
+                vals.append(obj[f.name].encode()) if t == PrimitiveType.CHAR else vals.append(obj[f.name])
                 cursor.val += FORMAT_SIZES[t]
 
         elif isinstance(f.type, Set):
@@ -728,9 +725,8 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
 
         elif isinstance(f.type, PrimitiveType):
             fmt.append(FORMAT[f.type])
-            vals.append(obj[f.name])
+            vals.append(obj[f.name].encode()) if f.type == PrimitiveType.CHAR else vals.append(obj[f.name])
             cursor.val += FORMAT_SIZES[f.type]
-
         else:
             assert 0
 
@@ -1028,7 +1024,7 @@ def _parse_schema(f: TextIO) -> Schema:
                 assert isinstance(stack[-1], Set)
                 stack[-1].choices.append(x)
 
-        elif tag == "field":
+        elif tag == "field" or tag=="data":
             if action == "start":
                 assert len(elem) == 0
 

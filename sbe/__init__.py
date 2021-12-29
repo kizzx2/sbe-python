@@ -721,7 +721,10 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             t = f.type.primitiveType
             if t == PrimitiveType.CHAR and f.type.length > 1:
                 fmt.append(str(f.type.length) + "s")
-                vals.append(obj[f.name].encode())
+                if isinstance(obj[f.name], bytes):
+                    vals.append(obj[f.name])
+                else:
+                    vals.append(obj[f.name].encode())
                 cursor.val += f.type.length
             else:
                 fmt.append(FORMAT[t])

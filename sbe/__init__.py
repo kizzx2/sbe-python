@@ -34,6 +34,12 @@ class EnumEncodingType(enum.Enum):
     CHAR = 'char'
 
 
+class Presence(enum.Enum):
+    CONSTANT = 'constant'
+    REQUIRED = 'required'
+    OPTIONAL = 'optional'
+
+
 FormatString = NewType('FormatString', str)
 
 
@@ -43,12 +49,7 @@ FORMAT_SIZES = {k: struct.calcsize(v) for k, v in FORMAT.items()}
 PRIMITIVE_TYPES = set(x.value for x in PrimitiveType.__members__.values())
 ENUM_ENCODING_TYPES = set(x.value for x in EnumEncodingType.__members__.values())
 SET_ENCODING_TYPES = set(x.value for x in SetEncodingType.__members__.values())
-
-
-class Presence(enum.Enum):
-    CONSTANT = 'cosntant'
-    REQUIRED = 'required'
-    OPTIONAL = 'optional'
+PRESENCE_TYPES = {x.value: x for x in Presence.__members__.values()}
 
 
 class CharacterEncoding(enum.Enum):
@@ -558,7 +559,7 @@ def _unpack_format(
 
     elif isinstance(type_, Group):
         if len(buffer[buffer_cursor.val:]) == 0:
-            return None
+            return ''
 
         dimension = _unpack_composite(schema, type_.dimensionType, buffer[buffer_cursor.val:])
         buffer_cursor.val += dimension.size
@@ -575,6 +576,8 @@ def _unpack_format(
         return rv
 
     elif isinstance(type_, Type):
+        if type_.presence == Presence.CONSTANT:
+            return ''
         if type_.primitiveType == PrimitiveType.CHAR:
             if buffer_cursor:
                 buffer_cursor.val += type_.length
@@ -585,6 +588,8 @@ def _unpack_format(
             return prefix + FORMAT[type_.primitiveType]
 
     elif isinstance(type_, (Set, Enum)):
+        if type_.presence == Presence.CONSTANT:
+            return ''
         if isinstance(type_.encodingType, (PrimitiveType, EnumEncodingType)):
             if type_.encodingType.value in PRIMITIVE_TYPES:
                 if buffer_cursor:
@@ -710,6 +715,8 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             _walk_fields_encode_composite(schema, f.type, obj[f.name], fmt, vals, cursor)
 
         elif isinstance(f.type, Type):
+            if f.type.presence == Presence.CONSTANT:
+                continue
             t = f.type.primitiveType
             if t == PrimitiveType.CHAR and f.type.length > 1:
                 fmt.append(str(f.type.length) + "s")
@@ -724,6 +731,8 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 cursor.val += FORMAT_SIZES[t]
 
         elif isinstance(f.type, Set):
+            if f.type.presence == Presence.CONSTANT:
+                continue
             if isinstance(f.type.encodingType, (PrimitiveType, SetEncodingType)):
                 encoding_primitive_type = PrimitiveType(f.type.encodingType.value)
             else:
@@ -734,6 +743,8 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             cursor.val += FORMAT_SIZES[encoding_primitive_type]
 
         elif isinstance(f.type, Enum):
+            if f.type.presence == Presence.CONSTANT:
+                continue
             if isinstance(f.type.encodingType, Type):
                 encoding_primitive_type = f.type.encodingType.primitiveType
             else:
@@ -905,7 +916,8 @@ def _walk_fields_decode_composite(schema: Schema, rv: dict, composite: Composite
             _walk_fields_decode_composite(schema, rv[t.name], t, vals, cursor)
 
         else:
-            _decode_value(schema, rv, t.name, t, vals, cursor)
+            if t.presence != Presence.CONSTANT:
+                _decode_value(schema, rv, t.name, t, vals, cursor)
 
 
 def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
@@ -928,7 +940,8 @@ def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Fiel
             _walk_fields_decode_composite(schema, rv[f.name], f.type, vals, cursor)
 
         else:
-            _decode_value(schema, rv, f.name, f.type, vals, cursor)
+            if f.type.presence != Presence.CONSTANT:
+                _decode_value(schema, rv, f.name, f.type, vals, cursor)
 
 
 def _parse_schema(f: TextIO) -> Schema:
@@ -983,6 +996,8 @@ def _parse_schema(f: TextIO) -> Schema:
                         x.characterEncoding = CharacterEncoding(attrs['characterEncoding'])
                 if 'semanticType' in attrs:
                     x.semanticType = attrs['semanticType']
+                if 'presence' in attrs:
+                    x.presence = PRESENCE_TYPES[attrs['presence']]
 
                 stack.append(x)
 

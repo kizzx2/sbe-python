@@ -79,7 +79,7 @@ class DecodedMessage:
 class Type:
     __slots__ = (
         'name', 'primitiveType', 'presence', 'semanticType',
-        'description', 'length', 'characterEncoding')
+        'description', 'length', 'characterEncoding', 'nullValue')
 
     name: str
     primitiveType: PrimitiveType
@@ -88,14 +88,22 @@ class Type:
     description: Optional[str]
     length: int
     characterEncoding: Optional[CharacterEncoding]
+    nullValue: Optional[Union[str, int, float]]
 
-    def __init__(self, name: str, primitiveType: PrimitiveType):
+    def __init__(self, name: str, primitiveType: PrimitiveType, nullValue: Optional[str]):
         super().__init__()
         self.name = name
         self.primitiveType = primitiveType
         self.presence = Presence.REQUIRED
         self.length = 1
         self.characterEncoding = None
+        if nullValue is not None:
+            if primitiveType == PrimitiveType.CHAR:
+                self.nullValue = nullValue.encode()
+            elif primitiveType in (PrimitiveType.FLOAT, PrimitiveType.DOUBLE):
+                self.nullValue = float(nullValue)
+            else:
+                self.nullValue = int(nullValue)
 
     def __repr__(self):
         rv = self.name + " ("
@@ -201,10 +209,18 @@ class Enum:
     description: Optional[str] = None
     valid_values: List[EnumValue] = field(default_factory=list)
 
-    def find_value_by_name(self, name: str) -> str:
-        return (next(x for x in self.valid_values if x.name == name).value).encode() if self.encodingType == EnumEncodingType.CHAR else int(next(x for x in self.valid_values if x.name == name).value)
+    def find_value_by_name(self, name: Optional[str]) -> str:
+        if name is None:
+            return self.encodingType.nullValue
+        val = next(x for x in self.valid_values if x.name == name).value
+        if self.encodingType == EnumEncodingType.CHAR or (isinstance(self.encodingType, Type) and self.encodingType.primitiveType == PrimitiveType.CHAR):
+            return val.encode()
+        else:
+            return int(val)
 
     def find_name_by_value(self, val: str) -> str:
+        if val not in (x.value for x in self.valid_values):
+            return None
         return next(x for x in self.valid_values if x.value == val).name
 
     def __repr__(self):
@@ -700,7 +716,10 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 cursor.val += f.type.length
             else:
                 fmt.append(FORMAT[t])
-                vals.append(obj[f.name].encode()) if t == PrimitiveType.CHAR else vals.append(obj[f.name])
+                if t == PrimitiveType.CHAR:
+                    vals.append(obj[f.name].encode())
+                else:
+                    vals.append(f.type.nullValue) if obj[f.name] is None else vals.append(obj[f.name])
                 cursor.val += FORMAT_SIZES[t]
 
         elif isinstance(f.type, Set):
@@ -953,13 +972,16 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "type":
             if action == "start":
                 attrs = dict(elem.items())
-                x = Type(name=attrs['name'], primitiveType=PrimitiveType(attrs['primitiveType']))
+                x = Type(name=attrs['name'], primitiveType=PrimitiveType(attrs['primitiveType']),
+                         nullValue=attrs['nullValue'] if 'nullValue' in attrs else None)
 
                 if x.primitiveType == PrimitiveType.CHAR:
                     if 'length' in attrs:
                         x.length = int(attrs['length'])
                     if 'characterEncoding' in attrs:
                         x.characterEncoding = CharacterEncoding(attrs['characterEncoding'])
+                if 'semanticType' in attrs:
+                    x.semanticType = attrs['semanticType']
 
                 stack.append(x)
 
@@ -975,8 +997,8 @@ def _parse_schema(f: TextIO) -> Schema:
             if action == "start":
                 attrs = dict(elem.items())
 
-                if attrs['encodingType'] in ENUM_ENCODING_TYPES:
-                    encoding_type = EnumEncodingType(attrs['encodingType'])
+                if attrs['encodingType'].lower() in ENUM_ENCODING_TYPES:
+                    encoding_type = EnumEncodingType(attrs['encodingType'].lower())
                 else:
                     encoding_type = stack[0].types[attrs['encodingType']]
 

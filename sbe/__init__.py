@@ -677,10 +677,11 @@ def _walk_fields_encode_composite(
 
         else:
             t1 = t.primitiveType
-            if t1 == PrimitiveType.CHAR and t.length > 1:
-                fmt.append(str(t.length) + "s")
-                vals.append(obj[t.name].encode())
-                cursor.val += t.length
+            if t1 == PrimitiveType.CHAR:
+                if t.length > 1:
+                    fmt.append(str(t.length) + "s")
+                    vals.append(obj[t.name].encode())
+                    cursor.val += t.length
             else:
                 fmt.append(FORMAT[t1])
                 vals.append(obj[t.name])

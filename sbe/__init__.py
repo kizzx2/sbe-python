@@ -292,6 +292,7 @@ class Group:
     name: str
     id: str
     dimensionType: Composite
+    blockLength: int
     description: Optional[str] = None
     fields: List[Union['Group', Field]] = field(default_factory=list)
 
@@ -496,10 +497,10 @@ class Schema:
         format_str_parts = []
         for f in m.fields:
             if isinstance(f, Group):
-                assert cursor.val <= header.value['blockLength']
+                assert cursor.val >= header.value['blockLength']
                 if cursor.val < header.value['blockLength']:
                     format_str_parts.append(str(header.value['blockLength'] - cursor.val) + 'x')
-                cursor.val = header.value['blockLength']
+                    cursor.val = header.value['blockLength']
             part = _unpack_format(self, f, '', buffer[body_offset:], cursor)
             if part:
                 format_str_parts.append(part)
@@ -694,11 +695,11 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
 
-            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or 0}
-            dimension_fmt = _pack_format(schema, schema.types['groupSizeEncoding'])
+            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength}
+            dimension_fmt = _pack_format(schema, f.dimensionType)
 
-            fmt.append(dimension_fmt)
-            for t in schema.types['groupSizeEncoding'].types:
+            fmt.extend(dimension_fmt)
+            for t in f.dimensionType.types:
                 vals.append(dimension[t.name])
 
             fmt.extend(fmt1)
@@ -1075,7 +1076,8 @@ def _parse_schema(f: TextIO) -> Schema:
                 stack.append(Group(
                     name=attrs['name'],
                     id=attrs['id'],
-                    dimensionType=stack[0].types[attrs.get('dimensionType', 'groupSizeEncoding')]))
+                    dimensionType=stack[0].types[attrs.get('dimensionType', 'groupSizeEncoding')],
+                    blockLength=int(attrs['blockLength'])))
 
             elif action == "end":
                 x = stack.pop()

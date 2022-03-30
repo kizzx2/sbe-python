@@ -302,6 +302,7 @@ class Group:
 class Message:
     name: str
     id: int
+    blockLength: int    # Space reserved for the root level of the Message
     description: Optional[str] = None
     fields: List[Union[Group, Field]] = field(default_factory=list, repr=False)
 
@@ -475,7 +476,7 @@ class Schema:
             'templateId': message.id,
             'schemaId': int(self.id),
             'version': int(self.version),
-            'blockLength': cursor.val,
+            'blockLength': message.blockLength, # Only root level of message
         }
         return b''.join([
             _pack_composite(self, self.types['messageHeader'], header),
@@ -1082,7 +1083,10 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "message":
             if action == "start":
                 attrs = dict(elem.items())
-                stack.append(Message(name=attrs['name'], id=int(attrs['id']), description=attrs.get('description')))
+                stack.append(Message(name=attrs['name'],
+                                     id=int(attrs['id']),
+                                     blockLength=int(attrs['blockLength']),
+                                     description=attrs.get('description')))
 
             elif action == "end":
                 x = stack.pop()

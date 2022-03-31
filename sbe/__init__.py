@@ -100,7 +100,7 @@ class Type:
         self.characterEncoding = None
         if nullValue is not None:
             if primitiveType == PrimitiveType.CHAR:
-                self.nullValue = nullValue.encode()
+                self.nullValue = chr(int(nullValue)).encode()
             elif primitiveType in (PrimitiveType.FLOAT, PrimitiveType.DOUBLE):
                 self.nullValue = float(nullValue)
             else:

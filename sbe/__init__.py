@@ -160,7 +160,7 @@ class Pointer:
             return self.set_.find_name_by_value(
                 rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
         elif self.value.endswith("s"):
-            return rv.replace(b"\x00", b"").decode('ascii', errors='ignore').strip()
+            return rc.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
 
         return rv
 
@@ -643,7 +643,7 @@ def _prettify_type(_schema: Schema, t: Type, v):
     if t.primitiveType == PrimitiveType.CHAR and (
         t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
     ):
-        return v.replace(b"\x00", b"").decode("ascii", errors='ignore').strip()
+        return v.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
 
     return v
 

@@ -7,7 +7,6 @@ import bitstring
 import lxml
 import lxml.etree
 
-
 class PrimitiveType(enum.Enum):
     CHAR = 'char'
     UINT8 = 'uint8'
@@ -31,7 +30,14 @@ class SetEncodingType(enum.Enum):
 
 class EnumEncodingType(enum.Enum):
     UINT8 = 'uint8'
+    UINT16 = 'uint16'
     CHAR = 'char'
+
+
+class Presence(enum.Enum):
+    CONSTANT = 'constant'
+    REQUIRED = 'required'
+    OPTIONAL = 'optional'
 
 
 FormatString = NewType('FormatString', str)
@@ -43,12 +49,7 @@ FORMAT_SIZES = {k: struct.calcsize(v) for k, v in FORMAT.items()}
 PRIMITIVE_TYPES = set(x.value for x in PrimitiveType.__members__.values())
 ENUM_ENCODING_TYPES = set(x.value for x in EnumEncodingType.__members__.values())
 SET_ENCODING_TYPES = set(x.value for x in SetEncodingType.__members__.values())
-
-
-class Presence(enum.Enum):
-    CONSTANT = 'cosntant'
-    REQUIRED = 'required'
-    OPTIONAL = 'optional'
+PRESENCE_TYPES = {x.value: x for x in Presence.__members__.values()}
 
 
 class CharacterEncoding(enum.Enum):
@@ -79,7 +80,7 @@ class DecodedMessage:
 class Type:
     __slots__ = (
         'name', 'primitiveType', 'presence', 'semanticType',
-        'description', 'length', 'characterEncoding')
+        'description', 'length', 'characterEncoding', 'nullValue')
 
     name: str
     primitiveType: PrimitiveType
@@ -88,14 +89,22 @@ class Type:
     description: Optional[str]
     length: int
     characterEncoding: Optional[CharacterEncoding]
+    nullValue: Optional[Union[str, int, float]]
 
-    def __init__(self, name: str, primitiveType: PrimitiveType):
+    def __init__(self, name: str, primitiveType: PrimitiveType, nullValue: Optional[str]):
         super().__init__()
         self.name = name
         self.primitiveType = primitiveType
         self.presence = Presence.REQUIRED
         self.length = 1
         self.characterEncoding = None
+        if nullValue is not None:
+            if primitiveType == PrimitiveType.CHAR:
+                self.nullValue = chr(int(nullValue)).encode()
+            elif primitiveType in (PrimitiveType.FLOAT, PrimitiveType.DOUBLE):
+                self.nullValue = float(nullValue)
+            else:
+                self.nullValue = int(nullValue)
 
     def __repr__(self):
         rv = self.name + " ("
@@ -201,10 +210,18 @@ class Enum:
     description: Optional[str] = None
     valid_values: List[EnumValue] = field(default_factory=list)
 
-    def find_value_by_name(self, name: str) -> str:
-        return int(next(x for x in self.valid_values if x.name == name).value)
+    def find_value_by_name(self, name: Optional[str]) -> str:
+        if name is None:
+            return self.encodingType.nullValue
+        val = next(x for x in self.valid_values if x.name == name).value
+        if self.encodingType == EnumEncodingType.CHAR or (isinstance(self.encodingType, Type) and self.encodingType.primitiveType == PrimitiveType.CHAR):
+            return val.encode()
+        else:
+            return int(val)
 
     def find_name_by_value(self, val: str) -> str:
+        if val not in (x.value for x in self.valid_values):
+            return None
         return next(x for x in self.valid_values if x.value == val).name
 
     def __repr__(self):
@@ -232,7 +249,7 @@ class Set:
 
     def encode(self, vals: Iterable[str]) -> int:
         vals = set(vals)
-        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).int
+        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).uint
 
     def decode(self, val: int) -> List[str]:
         if isinstance(self.encodingType, SetEncodingType):
@@ -276,6 +293,7 @@ class Group:
     name: str
     id: str
     dimensionType: Composite
+    blockLength: int
     description: Optional[str] = None
     fields: List[Union['Group', Field]] = field(default_factory=list)
 
@@ -284,6 +302,7 @@ class Group:
 class Message:
     name: str
     id: int
+    blockLength: int    # Space reserved for the root level of the Message
     description: Optional[str] = None
     fields: List[Union[Group, Field]] = field(default_factory=list, repr=False)
 
@@ -449,7 +468,6 @@ class Schema:
         fmts = []
         vals = []
         cursor = Cursor(0)
-
         _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
         fmt = "<" + ''.join(fmts)
 
@@ -458,9 +476,8 @@ class Schema:
             'templateId': message.id,
             'schemaId': int(self.id),
             'version': int(self.version),
-            'blockLength': cursor.val,
+            'blockLength': message.blockLength, # Only root level of message
         }
-
         return b''.join([
             _pack_composite(self, self.types['messageHeader'], header),
             struct.pack(fmt, *vals)
@@ -482,10 +499,10 @@ class Schema:
         format_str_parts = []
         for f in m.fields:
             if isinstance(f, Group):
-                assert cursor.val <= header.value['blockLength']
+                assert cursor.val >= header.value['blockLength']
                 if cursor.val < header.value['blockLength']:
                     format_str_parts.append(str(header.value['blockLength'] - cursor.val) + 'x')
-                cursor.val = header.value['blockLength']
+                    cursor.val = header.value['blockLength']
             part = _unpack_format(self, f, '', buffer[body_offset:], cursor)
             if part:
                 format_str_parts.append(part)
@@ -543,7 +560,7 @@ def _unpack_format(
 
     elif isinstance(type_, Group):
         if len(buffer[buffer_cursor.val:]) == 0:
-            return None
+            return ''
 
         dimension = _unpack_composite(schema, type_.dimensionType, buffer[buffer_cursor.val:])
         buffer_cursor.val += dimension.size
@@ -560,6 +577,8 @@ def _unpack_format(
         return rv
 
     elif isinstance(type_, Type):
+        if type_.presence == Presence.CONSTANT:
+            return ''
         if type_.primitiveType == PrimitiveType.CHAR:
             if buffer_cursor:
                 buffer_cursor.val += type_.length
@@ -570,6 +589,8 @@ def _unpack_format(
             return prefix + FORMAT[type_.primitiveType]
 
     elif isinstance(type_, (Set, Enum)):
+        if type_.presence == Presence.CONSTANT:
+            return ''
         if isinstance(type_.encodingType, (PrimitiveType, EnumEncodingType)):
             if type_.encodingType.value in PRIMITIVE_TYPES:
                 if buffer_cursor:
@@ -638,7 +659,6 @@ def _unpack_composite(schema: Schema, composite: Composite, buffer: memoryview):
 
     return UnpackedValue(rv, size)
 
-
 def _prettify_type(_schema: Schema, t: Type, v):
     if t.primitiveType == PrimitiveType.CHAR and (
         t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
@@ -658,10 +678,11 @@ def _walk_fields_encode_composite(
 
         else:
             t1 = t.primitiveType
-            if t1 == PrimitiveType.CHAR and t.length > 1:
-                fmt.append(str(t.length) + "s")
-                vals.append(obj[t.name].encode())
-                cursor.val += t.length
+            if t1 == PrimitiveType.CHAR:
+                if t.length > 1:
+                    fmt.append(str(t.length) + "s")
+                    vals.append(obj[t.name].encode())
+                    cursor.val += t.length
             else:
                 fmt.append(FORMAT[t1])
                 vals.append(obj[t.name])
@@ -681,11 +702,11 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
 
-            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or 0}
-            dimension_fmt = _pack_format(schema, schema.types['groupSizeEncoding'])
+            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength}
+            dimension_fmt = _pack_format(schema, f.dimensionType)
 
-            fmt.append(dimension_fmt)
-            for t in schema.types['groupSizeEncoding'].types:
+            fmt.extend(dimension_fmt)
+            for t in f.dimensionType.types:
                 vals.append(dimension[t.name])
 
             fmt.extend(fmt1)
@@ -696,17 +717,27 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             _walk_fields_encode_composite(schema, f.type, obj[f.name], fmt, vals, cursor)
 
         elif isinstance(f.type, Type):
+            if f.type.presence == Presence.CONSTANT:
+                continue
             t = f.type.primitiveType
             if t == PrimitiveType.CHAR and f.type.length > 1:
                 fmt.append(str(f.type.length) + "s")
-                vals.append(obj[f.name].encode())
+                if isinstance(obj[f.name], bytes):
+                    vals.append(obj[f.name])
+                else:
+                    vals.append(obj[f.name].encode())
                 cursor.val += f.type.length
             else:
                 fmt.append(FORMAT[t])
-                vals.append(obj[f.name])
+                if t == PrimitiveType.CHAR:
+                    vals.append(obj[f.name].encode())
+                else:
+                    vals.append(f.type.nullValue) if obj[f.name] is None else vals.append(obj[f.name])
                 cursor.val += FORMAT_SIZES[t]
 
         elif isinstance(f.type, Set):
+            if f.type.presence == Presence.CONSTANT:
+                continue
             if isinstance(f.type.encodingType, (PrimitiveType, SetEncodingType)):
                 encoding_primitive_type = PrimitiveType(f.type.encodingType.value)
             else:
@@ -717,6 +748,8 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             cursor.val += FORMAT_SIZES[encoding_primitive_type]
 
         elif isinstance(f.type, Enum):
+            if f.type.presence == Presence.CONSTANT:
+                continue
             if isinstance(f.type.encodingType, Type):
                 encoding_primitive_type = f.type.encodingType.primitiveType
             else:
@@ -728,9 +761,8 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
 
         elif isinstance(f.type, PrimitiveType):
             fmt.append(FORMAT[f.type])
-            vals.append(obj[f.name])
+            vals.append(obj[f.name].encode()) if f.type == PrimitiveType.CHAR else vals.append(obj[f.name])
             cursor.val += FORMAT_SIZES[f.type]
-
         else:
             assert 0
 
@@ -889,7 +921,8 @@ def _walk_fields_decode_composite(schema: Schema, rv: dict, composite: Composite
             _walk_fields_decode_composite(schema, rv[t.name], t, vals, cursor)
 
         else:
-            _decode_value(schema, rv, t.name, t, vals, cursor)
+            if t.presence != Presence.CONSTANT:
+                _decode_value(schema, rv, t.name, t, vals, cursor)
 
 
 def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Field]], vals: List, cursor: Cursor):
@@ -912,7 +945,8 @@ def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Fiel
             _walk_fields_decode_composite(schema, rv[f.name], f.type, vals, cursor)
 
         else:
-            _decode_value(schema, rv, f.name, f.type, vals, cursor)
+            if f.type.presence != Presence.CONSTANT:
+                _decode_value(schema, rv, f.name, f.type, vals, cursor)
 
 
 def _parse_schema(f: TextIO) -> Schema:
@@ -957,13 +991,18 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "type":
             if action == "start":
                 attrs = dict(elem.items())
-                x = Type(name=attrs['name'], primitiveType=PrimitiveType(attrs['primitiveType']))
+                x = Type(name=attrs['name'], primitiveType=PrimitiveType(attrs['primitiveType']),
+                         nullValue=attrs['nullValue'] if 'nullValue' in attrs else None)
 
                 if x.primitiveType == PrimitiveType.CHAR:
                     if 'length' in attrs:
                         x.length = int(attrs['length'])
                     if 'characterEncoding' in attrs:
                         x.characterEncoding = CharacterEncoding(attrs['characterEncoding'])
+                if 'semanticType' in attrs:
+                    x.semanticType = attrs['semanticType']
+                if 'presence' in attrs:
+                    x.presence = PRESENCE_TYPES[attrs['presence']]
 
                 stack.append(x)
 
@@ -979,8 +1018,8 @@ def _parse_schema(f: TextIO) -> Schema:
             if action == "start":
                 attrs = dict(elem.items())
 
-                if attrs['encodingType'] in ENUM_ENCODING_TYPES:
-                    encoding_type = EnumEncodingType(attrs['encodingType'])
+                if attrs['encodingType'].lower() in ENUM_ENCODING_TYPES:
+                    encoding_type = EnumEncodingType(attrs['encodingType'].lower())
                 else:
                     encoding_type = stack[0].types[attrs['encodingType']]
 
@@ -1028,7 +1067,7 @@ def _parse_schema(f: TextIO) -> Schema:
                 assert isinstance(stack[-1], Set)
                 stack[-1].choices.append(x)
 
-        elif tag == "field":
+        elif tag == "field" or tag=="data":
             if action == "start":
                 assert len(elem) == 0
 
@@ -1044,7 +1083,10 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "message":
             if action == "start":
                 attrs = dict(elem.items())
-                stack.append(Message(name=attrs['name'], id=int(attrs['id']), description=attrs.get('description')))
+                stack.append(Message(name=attrs['name'],
+                                     id=int(attrs['id']),
+                                     blockLength=int(attrs['blockLength']),
+                                     description=attrs.get('description')))
 
             elif action == "end":
                 x = stack.pop()
@@ -1057,7 +1099,8 @@ def _parse_schema(f: TextIO) -> Schema:
                 stack.append(Group(
                     name=attrs['name'],
                     id=attrs['id'],
-                    dimensionType=stack[0].types[attrs.get('dimensionType', 'groupSizeEncoding')]))
+                    dimensionType=stack[0].types[attrs.get('dimensionType', 'groupSizeEncoding')],
+                    blockLength=int(attrs['blockLength'])))
 
             elif action == "end":
                 x = stack.pop()

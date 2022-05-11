@@ -470,7 +470,7 @@ class Schema:
         fmts = []
         vals = []
         cursor = Cursor(0)
-        _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
+        _walk_fields_encode(self, message.blockLength, message.fields, obj, fmts, vals, cursor)
         fmt = "<" + ''.join(fmts)
 
         header = {
@@ -706,20 +706,29 @@ def _walk_fields_encode_composite(
                 cursor.val += FORMAT_SIZES[t1]
 
 
-def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
+def _add_padding(block_length, cursor):
+    diff = block_length - cursor.val
+    if diff > 0:
+        cursor.val += diff
+        return "x" * diff
+    return ""
+
+
+def _walk_fields_encode(schema: Schema, block_length: int, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
+            try:
+                fmt[-1] += _add_padding(block_length, cursor)
+            except IndexError:
+                ...
             xs = obj[f.name]
 
             fmt1 = []
             vals1 = []
-            block_length = None
             for x in xs:
-                _walk_fields_encode(schema, f.fields, x, fmt1, vals1, Cursor(0))
-                if block_length is None:
-                    block_length = struct.calcsize("<" + ''.join(fmt1))
+                _walk_fields_encode(schema, f.blockLength, f.fields, x, fmt1, vals1, Cursor(0))
 
-            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength}
+            dimension = {"numInGroup": len(obj[f.name]), "blockLength": f.blockLength}
             dimension_fmt = _pack_format(schema, f.dimensionType)
 
             fmt.extend(dimension_fmt)
@@ -782,6 +791,11 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             cursor.val += FORMAT_SIZES[f.type]
         else:
             assert 0
+
+    try:
+        fmt[-1] += _add_padding(block_length, cursor)
+    except IndexError:
+        ...
 
 
 def _walk_fields_wrap_composite(

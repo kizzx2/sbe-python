@@ -79,12 +79,13 @@ class DecodedMessage:
 @dataclass(init=False)
 class Type:
     __slots__ = (
-        'name', 'primitiveType', 'presence', 'semanticType',
+        'name', 'primitiveType', 'presence', 'offset', 'semanticType',
         'description', 'length', 'characterEncoding', 'nullValue')
 
     name: str
     primitiveType: PrimitiveType
     presence: Presence
+    offset: Optional[int]
     semanticType: Optional[str]
     description: Optional[str]
     length: int
@@ -96,6 +97,7 @@ class Type:
         self.name = name
         self.primitiveType = primitiveType
         self.presence = Presence.REQUIRED
+        self.offset = None
         self.length = 1
         self.characterEncoding = None
         if nullValue is not None:
@@ -605,16 +607,31 @@ def _unpack_format(
         return _unpack_format(schema, type_.encodingType, '', buffer, buffer_cursor)
 
     elif isinstance(type_, Composite):
-        return prefix + ''.join(_unpack_format(schema, t, '', buffer, buffer_cursor) for t in type_.types)
+        format_string = prefix
+        current_offset = 0
+        for t in type_.types:
+            if t.offset and t.offset > current_offset:
+                format_string += "x" * (t.offset - current_offset)
+                if buffer_cursor:
+                    buffer_cursor.val += t.offset - current_offset
+            format_string += _unpack_format(schema, t, '', buffer, buffer_cursor)
+            current_offset = struct.calcsize(format_string)
+        return format_string
 
 
 def _pack_format(_schema: Schema, composite: Composite):
     fmt = []
+    current_offset = 0
     for t in composite.types:
+        try:
+            padding = "x" * max(t.offset - current_offset, 0)
+        except TypeError:
+            padding = ""
         if t.length > 1 and t.primitiveType == PrimitiveType.CHAR:
-            fmt.append(str(t.length) + 's')
+            fmt.append(padding + str(t.length) + 's')
         else:
-            fmt.append(FORMAT[t.primitiveType])
+            fmt.append(padding + FORMAT[t.primitiveType])
+        current_offset += struct.calcsize(fmt[-1])
 
     return ''.join(fmt)
 
@@ -1003,6 +1020,8 @@ def _parse_schema(f: TextIO) -> Schema:
                     x.semanticType = attrs['semanticType']
                 if 'presence' in attrs:
                     x.presence = PRESENCE_TYPES[attrs['presence']]
+                if 'offset' in attrs:
+                    x.offset = int(attrs['offset'])
 
                 stack.append(x)
 

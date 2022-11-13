@@ -472,11 +472,11 @@ class Schema:
         fmt = "<" + ''.join(fmts)
 
         header = {
-            **header,
             'templateId': message.id,
             'schemaId': int(self.id),
             'version': int(self.version),
             'blockLength': message.blockLength, # Only root level of message
+            **header,
         }
         return b''.join([
             _pack_composite(self, self.types['messageHeader'], header),

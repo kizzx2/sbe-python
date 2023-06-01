@@ -676,7 +676,7 @@ def _walk_fields_encode_composite(
         if isinstance(t, Composite):
             _walk_fields_encode_composite(schema, t, obj[t.name], fmt, vals, cursor)
 
-        else:
+        elif t.presence != Presence.CONSTANT:
             t1 = t.primitiveType
             if t1 == PrimitiveType.CHAR:
                 if t.length > 1:

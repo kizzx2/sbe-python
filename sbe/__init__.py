@@ -454,6 +454,7 @@ class Schema:
     header_wrapper: WrappedComposite = None
     header_size: int = None
     message_wrappers: Dict[int, WrappedComposite] = field(default_factory=dict)
+    header_type_name: str = 'messageHeader'
 
     @classmethod
     def parse(cls, f: TextIO) -> 'Schema':
@@ -479,18 +480,18 @@ class Schema:
             **header,
         }
         return b''.join([
-            _pack_composite(self, self.types['messageHeader'], header),
+            _pack_composite(self, self.types[self.header_type_name], header),
             struct.pack(fmt, *vals)
         ])
 
     def decode_header(self, buffer: Union[bytes, memoryview]) -> dict:
         buffer = memoryview(buffer)
-        return _unpack_composite(self, self.types['messageHeader'], buffer).value
+        return _unpack_composite(self, self.types[self.header_type_name], buffer).value
 
     def decode(self, buffer: Union[bytes, memoryview]) -> dict:
         buffer = memoryview(buffer)
 
-        header = _unpack_composite(self, self.types['messageHeader'], buffer)
+        header = _unpack_composite(self, self.types[self.header_type_name], buffer)
         body_offset = header.size
 
         m = self.messages[header.value['templateId']]
@@ -517,7 +518,7 @@ class Schema:
     def wrap(self, buf: Union[bytes, memoryview], header_only=False) -> WrappedMessage:
         buf = memoryview(buf)
 
-        header = WrappedComposite('messageHeader', self.header_wrapper.pointers, buf, 0, self)
+        header = WrappedComposite(self.header_type_name, self.header_wrapper.pointers, buf, 0, self)
         if header_only:
             return WrappedMessage(buf, header, None)
 
@@ -533,9 +534,9 @@ class Schema:
         cursor = Cursor(0)
 
         pointers = {}
-        _walk_fields_wrap_composite(self, pointers, self.types['messageHeader'], cursor)
-        self.header_wrapper = WrappedComposite('messageHeader', pointers, None, 0)
-        self.header_size = struct.calcsize(_unpack_format(self, self.types['messageHeader']))
+        _walk_fields_wrap_composite(self, pointers, self.types[self.header_type_name], cursor)
+        self.header_wrapper = WrappedComposite(self.header_type_name, pointers, None, 0)
+        self.header_size = struct.calcsize(_unpack_format(self, self.types[self.header_type_name]))
 
         for i, m in self.messages.items():
             pointers = {}
@@ -962,7 +963,8 @@ def _parse_schema(f: TextIO) -> Schema:
         if tag == "messageSchema":
             if action == "start":
                 attrs = dict(elem.items())
-                x = Schema(attrs['id'], attrs['version'])
+                x = Schema(attrs['id'], attrs['version'],
+                           header_type_name=attrs.get('headerType', 'messageHeader'))
                 stack.append(x)
             elif action == "end":
                 pass

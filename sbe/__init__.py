@@ -499,7 +499,6 @@ class Schema:
         format_str_parts = []
         for f in m.fields:
             if isinstance(f, Group):
-                assert cursor.val >= header.value['blockLength']
                 if cursor.val < header.value['blockLength']:
                     format_str_parts.append(str(header.value['blockLength'] - cursor.val) + 'x')
                     cursor.val = header.value['blockLength']

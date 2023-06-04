@@ -38,7 +38,7 @@ x.value
 # If you need an initial offset, apply it Pythonically
 schema.decode(buf[19:])
 
-# decode_header to avoid filter out messages based on header to avoid decoding
+# decode_header to filter out messages based on header to avoid decoding
 # message bodies that are not needed
 schema.decode_header(buf)['templateId']
 ```
@@ -101,6 +101,12 @@ with open('./your-schema.xml', 'r') as f:
 
 # message_id from the schema you want to encode
 message_id = 3
+
+obj = {
+  'userId': 11,
+  'price': 5678.0,
+  # ...
+}
 
 # Encode from Python dict in one-line
 schema.encode(schema.messages[3], obj)

@@ -79,12 +79,13 @@ class DecodedMessage:
 @dataclass(init=False)
 class Type:
     __slots__ = (
-        'name', 'primitiveType', 'presence', 'semanticType',
+        'name', 'primitiveType', 'presence', 'offset', 'semanticType',
         'description', 'length', 'characterEncoding', 'nullValue')
 
     name: str
     primitiveType: PrimitiveType
     presence: Presence
+    offset: Optional[int]
     semanticType: Optional[str]
     description: Optional[str]
     length: int
@@ -96,6 +97,7 @@ class Type:
         self.name = name
         self.primitiveType = primitiveType
         self.presence = Presence.REQUIRED
+        self.offset = None
         self.length = 1
         self.characterEncoding = None
         if nullValue is not None:
@@ -469,7 +471,7 @@ class Schema:
         fmts = []
         vals = []
         cursor = Cursor(0)
-        _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
+        _walk_fields_encode(self, message.blockLength, message.fields, obj, fmts, vals, cursor)
         fmt = "<" + ''.join(fmts)
 
         header = {
@@ -605,16 +607,31 @@ def _unpack_format(
         return _unpack_format(schema, type_.encodingType, '', buffer, buffer_cursor)
 
     elif isinstance(type_, Composite):
-        return prefix + ''.join(_unpack_format(schema, t, '', buffer, buffer_cursor) for t in type_.types)
+        format_string = prefix
+        current_offset = 0
+        for t in type_.types:
+            if t.offset and t.offset > current_offset:
+                format_string += "x" * (t.offset - current_offset)
+                if buffer_cursor:
+                    buffer_cursor.val += t.offset - current_offset
+            format_string += _unpack_format(schema, t, '', buffer, buffer_cursor)
+            current_offset = struct.calcsize(format_string)
+        return format_string
 
 
 def _pack_format(_schema: Schema, composite: Composite):
     fmt = []
+    current_offset = 0
     for t in composite.types:
+        try:
+            padding = "x" * max(t.offset - current_offset, 0)
+        except TypeError:
+            padding = ""
         if t.length > 1 and t.primitiveType == PrimitiveType.CHAR:
-            fmt.append(str(t.length) + 's')
+            fmt.append(padding + str(t.length) + 's')
         else:
-            fmt.append(FORMAT[t.primitiveType])
+            fmt.append(padding + FORMAT[t.primitiveType])
+        current_offset += struct.calcsize(fmt[-1])
 
     return ''.join(fmt)
 
@@ -689,20 +706,29 @@ def _walk_fields_encode_composite(
                 cursor.val += FORMAT_SIZES[t1]
 
 
-def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
+def _add_padding(block_length, cursor):
+    diff = block_length - cursor.val
+    if diff > 0:
+        cursor.val += diff
+        return "x" * diff
+    return ""
+
+
+def _walk_fields_encode(schema: Schema, block_length: int, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
+            try:
+                fmt[-1] += _add_padding(block_length, cursor)
+            except IndexError:
+                ...
             xs = obj[f.name]
 
             fmt1 = []
             vals1 = []
-            block_length = None
             for x in xs:
-                _walk_fields_encode(schema, f.fields, x, fmt1, vals1, Cursor(0))
-                if block_length is None:
-                    block_length = struct.calcsize("<" + ''.join(fmt1))
+                _walk_fields_encode(schema, f.blockLength, f.fields, x, fmt1, vals1, Cursor(0))
 
-            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength}
+            dimension = {"numInGroup": len(obj[f.name]), "blockLength": f.blockLength}
             dimension_fmt = _pack_format(schema, f.dimensionType)
 
             fmt.extend(dimension_fmt)
@@ -765,6 +791,11 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
             cursor.val += FORMAT_SIZES[f.type]
         else:
             assert 0
+
+    try:
+        fmt[-1] += _add_padding(block_length, cursor)
+    except IndexError:
+        ...
 
 
 def _walk_fields_wrap_composite(
@@ -1004,6 +1035,8 @@ def _parse_schema(f: TextIO) -> Schema:
                     x.semanticType = attrs['semanticType']
                 if 'presence' in attrs:
                     x.presence = PRESENCE_TYPES[attrs['presence']]
+                if 'offset' in attrs:
+                    x.offset = int(attrs['offset'])
 
                 stack.append(x)
 

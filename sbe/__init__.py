@@ -273,7 +273,7 @@ class Set:
             length = FORMAT_SIZES[self.encodingType.primitiveType] * 8
 
         bits = bitstring.Bits(uint=val, length=length)
-        return [self.choices[i].name for i, v in enumerate(bits) if v]
+        return [self.choices[i].name for i, v in enumerate(reversed(bits)) if v]
 
     def __repr__(self):
         return f"<Set '{self.name}'>"

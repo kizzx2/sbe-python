@@ -272,8 +272,7 @@ class Set:
         else:
             length = FORMAT_SIZES[self.encodingType.primitiveType] * 8
 
-        bits = bitstring.Bits(uint=val, length=length)
-        return [self.choices[i].name for i, v in enumerate(reversed(bits)) if v]
+        return [c.name for c in self.choices if (1 << c.value) & val]
 
     def __repr__(self):
         return f"<Set '{self.name}'>"
@@ -1083,7 +1082,7 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "choice":
             if action == "start":
                 attrs = dict(elem.items())
-                stack.append(SetChoice(name=attrs['name'], value=elem.text.strip()))
+                stack.append(SetChoice(name=attrs['name'], value=int(elem.text.strip())))
 
             elif action == "end":
                 x = stack.pop()

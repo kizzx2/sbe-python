@@ -268,12 +268,11 @@ class Set:
 
     def decode(self, val: int) -> List[str]:
         if isinstance(self.encodingType, SetEncodingType):
-            length = FORMAT_SIZES[PrimitiveType[self.encodingType.value]] * 8
+            length = FORMAT_SIZES[PrimitiveType[self.encodingType.name]] * 8
         else:
             length = FORMAT_SIZES[self.encodingType.primitiveType] * 8
 
-        bits = bitstring.Bits(uint=val, length=length)
-        return [self.choices[i].name for i, v in enumerate(reversed(bits)) if v]
+        return [c.name for c in self.choices if (1 << c.value) & val]
 
     def __repr__(self):
         return f"<Set '{self.name}'>"
@@ -610,7 +609,7 @@ def _unpack_format(
     elif isinstance(type_, (Set, Enum)):
         if type_.presence == Presence.CONSTANT:
             return ''
-        if isinstance(type_.encodingType, (PrimitiveType, EnumEncodingType)):
+        if isinstance(type_.encodingType, (PrimitiveType, EnumEncodingType, SetEncodingType)):
             if type_.encodingType.value in PRIMITIVE_TYPES:
                 if buffer_cursor:
                     buffer_cursor.val += FORMAT_SIZES[PrimitiveType(type_.encodingType.value)]
@@ -1083,7 +1082,7 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "choice":
             if action == "start":
                 attrs = dict(elem.items())
-                stack.append(SetChoice(name=attrs['name'], value=elem.text.strip()))
+                stack.append(SetChoice(name=attrs['name'], value=int(elem.text.strip())))
 
             elif action == "end":
                 x = stack.pop()

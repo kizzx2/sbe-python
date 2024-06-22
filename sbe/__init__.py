@@ -171,7 +171,7 @@ class Pointer:
             return self.set_.find_name_by_value(
                 rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
         elif self.value.endswith("s"):
-            return rc.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
+            return rv.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
 
         return rv
 

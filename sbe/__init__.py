@@ -797,14 +797,15 @@ def _walk_fields_wrap_composite(
             rv[t.name] = WrappedComposite(t.name, rv1, None, offset)
 
         else:
-            t1 = t.primitiveType
-            cursor.val += t.padding
-            if t1 == PrimitiveType.CHAR and t.length > 1:
-                rv[t.name] = Pointer(cursor.val, str(t.length) + "s", t.length)
-                cursor.val += t.length
-            else:
-                rv[t.name] = Pointer(cursor.val, FORMAT[t1], FORMAT_SIZES[t1])
-                cursor.val += FORMAT_SIZES[t1]
+            if t.type.presence != Presence.CONSTANT:
+                t1 = t.primitiveType
+                cursor.val += t.padding
+                if t1 == PrimitiveType.CHAR and t.length > 1:
+                    rv[t.name] = Pointer(cursor.val, str(t.length) + "s", t.length)
+                    cursor.val += t.length
+                else:
+                    rv[t.name] = Pointer(cursor.val, FORMAT[t1], FORMAT_SIZES[t1])
+                    cursor.val += FORMAT_SIZES[t1]
 
 
 def _walk_fields_wrap(
@@ -856,6 +857,8 @@ def _walk_fields_wrap(
                 cursor.val - cursor0)
 
         elif isinstance(f.type, Type):
+            if t.type.presence == Presence.CONSTANT:
+                continue
             t = f.type.primitiveType
             if t == PrimitiveType.CHAR and f.type.length > 1:
                 rv[f.name] = Pointer(cursor.val, str(f.type.length) + "s", f.type.length)

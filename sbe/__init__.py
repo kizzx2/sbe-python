@@ -129,6 +129,17 @@ class EnumValue:
 
 
 @dataclass
+class RefType:
+    name: str
+    type: str
+
+    __slots__ = ('name', 'type')
+
+    def __repr__(self):
+        return f"{self.name} (ref:{self.type})"
+
+
+@dataclass
 class Pointer:
     offset: int
     value: Union[FormatString, Dict[str, 'Pointer']]
@@ -211,6 +222,7 @@ class Enum:
     semanticType: Optional[str] = None
     description: Optional[str] = None
     valid_values: List[EnumValue] = field(default_factory=list)
+    padding = 0
 
     def find_value_by_name(self, name: Optional[str]) -> str:
         if name is None:
@@ -233,7 +245,8 @@ class Enum:
 @dataclass
 class Composite:
     name: str
-    types: List[Union['Composite', Type]] = field(default_factory=list)
+    parent: Union['Composite', 'Schema']
+    types: List[Union['Composite', Type, RefType, Enum]] = field(default_factory=list)
     description: Optional[str] = None
 
     def size(self):
@@ -241,7 +254,7 @@ class Composite:
         for t in self.types:
             if isinstance(t, Type):
                 if t.primitiveType == PrimitiveType.CHAR:
-                    sz += type_.length
+                    sz += t.length
                 else:
                     sz += FORMAT_SIZES[t.primitiveType]
             else:
@@ -307,7 +320,7 @@ class Group:
     name: str
     id: str
     dimensionType: Composite
-    blockLength: int
+    blockLength: Optional[int] = None
     description: Optional[str] = None
     fields: List[Union['Group', Field]] = field(default_factory=list)
 
@@ -316,7 +329,7 @@ class Group:
 class Message:
     name: str
     id: int
-    blockLength: int    # Space reserved for the root level of the Message
+    blockLength: Optional[int] = None
     description: Optional[str] = None
     fields: List[Union[Group, Field]] = field(default_factory=list, repr=False)
 
@@ -462,7 +475,7 @@ class Cursor:
 class Schema:
     id: int
     version: int
-    types: Dict[str, Union[Composite, Type]] = field(default_factory=dict)
+    types: Dict[str, Union[Composite, Type, RefType, Enum]] = field(default_factory=dict)
     messages: Dict[int, Message] = field(default_factory=dict)
 
     header_wrapper: WrappedComposite = None
@@ -490,9 +503,10 @@ class Schema:
             'templateId': message.id,
             'schemaId': int(self.id),
             'version': int(self.version),
-            'blockLength': message.blockLength, # Only root level of message
             **header,
         }
+        if message.blockLength is not None:
+            header['blockLength'] = message.blockLength
         return b''.join([
             _pack_composite(self, self.types[self.header_type_name], header),
             struct.pack(fmt, *vals)
@@ -561,7 +575,7 @@ class Schema:
 
 def _unpack_format(
     schema: Schema,
-    type_: Union[Field, Group, PrimitiveType, Type, Set, Enum, Composite],
+    type_: Union[Field, Group, PrimitiveType, Type, RefType, Set, Enum, Composite],
     prefix='<', buffer=None, buffer_cursor=None
 ):
     if isinstance(type_, PrimitiveType):
@@ -691,16 +705,32 @@ def _walk_fields_encode_composite(
     obj: dict, fmt: list, vals: list, cursor: Cursor
 ):
     for t in composite.types:
+        if isinstance(t, RefType):
+            t = _resolve_ref_type(t, composite)
+
         if isinstance(t, Composite):
             _walk_fields_encode_composite(schema, t, obj[t.name], fmt, vals, cursor)
+            continue
 
-        elif t.presence != Presence.CONSTANT:
-            t1 = t.primitiveType
+        if t.presence != Presence.CONSTANT:
+            if isinstance(t, Enum):
+                if isinstance(t.encodingType, Type):
+                    t1 = t.encodingType.primitiveType
+                    l = t.encodingType.length
+                else:
+                    assert isinstance(t.encodingType, EnumEncodingType)
+                    t1 = PrimitiveType(t.encodingType.value)
+                    l = 1
+            else:
+                assert isinstance(t, Type)
+                t1 = t.primitiveType
+                l = t.length
+
             if t1 == PrimitiveType.CHAR:
-                if t.length > 1:
-                    fmt.append(str(t.length) + "s")
+                if l > 1:
+                    fmt.append(str(l) + "s")
                     vals.append(obj[t.name].encode())
-                    cursor.val += t.length
+                    cursor.val += l
             else:
                 fmt.append(FORMAT[t1])
                 vals.append(obj[t.name])
@@ -720,7 +750,7 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
 
-            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength}
+            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength or 0}
             dimension_fmt = _pack_format(schema, f.dimensionType)
 
             fmt.extend(dimension_fmt)
@@ -784,24 +814,55 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: 
         else:
             assert 0
 
+def _resolve_ref_type(t: RefType, composite: Composite):
+    parent = composite.parent
+    while parent is not None:
+        if isinstance(parent, Schema):
+            if t.type in parent.types:
+                return parent.types[t.type]
+            else:
+                assert False, f"RefType '{t.type}' not found in schema"
+        else:
+            t1 = next((x for x in parent.types if x.name == t.type), None)
+            if t1 is not None:
+                return t1
+            parent = parent.parent
+    assert False, "unreachable"
 
 def _walk_fields_wrap_composite(
     schema: Schema, rv: Dict[str, Union[Pointer, WrappedGroup]],
     composite: Composite, cursor: Cursor
 ):
     for t in composite.types:
+        if isinstance(t, RefType):
+            t = _resolve_ref_type(t, composite)
+
         if isinstance(t, Composite):
             rv1 = {}
             offset = cursor.val
             _walk_fields_wrap_composite(schema, rv1, t, cursor)
             rv[t.name] = WrappedComposite(t.name, rv1, None, offset)
+            continue
 
-        elif t.presence != Presence.CONSTANT:
-            t1 = t.primitiveType
+        if t.presence != Presence.CONSTANT:
+            if isinstance(t, Enum):
+                if isinstance(t.encodingType, Type):
+                    t1 = t.encodingType.primitiveType
+                    l = t.encodingType.length
+                else:
+                    assert isinstance(t.encodingType, EnumEncodingType)
+                    t1 = PrimitiveType(t.encodingType.value)
+                    l = 1
+            else:
+                assert isinstance(t, Type)
+                t1 = t.primitiveType
+                l = t.length
+
             cursor.val += t.padding
-            if t1 == PrimitiveType.CHAR and t.length > 1:
-                rv[t.name] = Pointer(cursor.val, str(t.length) + "s", t.length)
-                cursor.val += t.length
+            if t1 == PrimitiveType.CHAR:
+                if l> 1:
+                    rv[t.name] = Pointer(cursor.val, str(l) + "s", l)
+                    cursor.val += t.length
             else:
                 rv[t.name] = Pointer(cursor.val, FORMAT[t1], FORMAT_SIZES[t1])
                 cursor.val += FORMAT_SIZES[t1]
@@ -972,6 +1033,7 @@ def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Fiel
 
 def _parse_schema(f: TextIO) -> Schema:
     doc = lxml.etree.parse(f)
+    doc.xinclude()
     stack = []
 
     for action, elem in lxml.etree.iterwalk(doc, ("start", "end")):
@@ -996,7 +1058,7 @@ def _parse_schema(f: TextIO) -> Schema:
         elif tag == "composite":
             if action == "start":
                 name = next(v for k, v in elem.items() if k == 'name')
-                x = Composite(name=name)
+                x = Composite(name=name, parent=stack[-1])
                 for k, v in elem.items():
                     if k == 'name':
                         pass
@@ -1051,8 +1113,10 @@ def _parse_schema(f: TextIO) -> Schema:
 
             elif action == "end":
                 x = stack.pop()
-                assert isinstance(stack[-1], Schema)
-                stack[-1].types[x.name] = x
+                if isinstance(stack[-1], Composite):
+                    stack[-1].types.append(x)
+                elif isinstance(stack[-1], Schema):
+                    stack[-1].types[x.name] = x
 
         elif tag == "validValue":
             if action == "start":
@@ -1109,13 +1173,26 @@ def _parse_schema(f: TextIO) -> Schema:
                 attrs = dict(elem.items())
                 stack.append(Message(name=attrs['name'],
                                      id=int(attrs['id']),
-                                     blockLength=int(attrs['blockLength']),
+                                     blockLength=int(attrs['blockLength']) if 'blockLength' in attrs else None,
                                      description=attrs.get('description')))
 
             elif action == "end":
                 x = stack.pop()
                 assert isinstance(stack[-1], Schema)
                 stack[-1].messages[x.id] = x
+
+        elif tag == "ref":
+            if action == "start":
+                stack.append(RefType(name=elem.attrib['name'], type=elem.attrib['type']))
+
+            elif action == "end":
+                x = stack.pop()
+                if isinstance(stack[-1], Composite):
+                    stack[-1].types.append(x)
+                elif isinstance(stack[-1], Schema):
+                    stack[-1].types[x.name] = x
+                else:
+                    assert False, "unreachable"
 
         elif tag == "group":
             if action == "start":
@@ -1124,7 +1201,7 @@ def _parse_schema(f: TextIO) -> Schema:
                     name=attrs['name'],
                     id=attrs['id'],
                     dimensionType=stack[0].types[attrs.get('dimensionType', 'groupSizeEncoding')],
-                    blockLength=int(attrs['blockLength'])))
+                    blockLength=int(attrs['blockLength']) if 'blockLength' in attrs else None))
 
             elif action == "end":
                 x = stack.pop()

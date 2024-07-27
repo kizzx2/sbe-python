@@ -2,7 +2,7 @@ import setuptools
 
 setuptools.setup(
     name="sbe",
-    version="0.3.8",
+    version="0.4.0",
     author="Chris Yuen",
     author_email="chris@kizzx2.com",
     long_description=open('README.md', 'r').read(),

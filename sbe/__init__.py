@@ -1030,12 +1030,14 @@ def _walk_fields_decode(schema: Schema, rv: dict, fields: List[Union[Group, Fiel
             if f.type.presence != Presence.CONSTANT:
                 _decode_value(schema, rv, f.name, f.type, vals, cursor)
 
-
 def _parse_schema(f: TextIO) -> Schema:
     doc = lxml.etree.parse(f)
     doc.xinclude()
-    stack = []
+    schema_with_types = _parse_schema_impl(doc, ['messageSchema', 'type'])
+    return _parse_schema_impl(doc, None, schema_with_types.types)
 
+def _parse_schema_impl(doc, only_tags: Optional[list] = None, extra_types: Optional[dict] = None) -> Schema:
+    stack = []
     for action, elem in lxml.etree.iterwalk(doc, ("start", "end")):
         assert action in ("start", "end")
 
@@ -1043,11 +1045,16 @@ def _parse_schema(f: TextIO) -> Schema:
         if "}" in tag:
             tag = tag[tag.index("}") + 1:]
 
+        if only_tags is not None and tag not in only_tags:
+            continue
+
         if tag == "messageSchema":
             if action == "start":
                 attrs = dict(elem.items())
                 x = Schema(attrs['id'], attrs['version'],
                            header_type_name=attrs.get('headerType', 'messageHeader'))
+                if extra_types is not None:
+                    x.types.update(extra_types)
                 stack.append(x)
             elif action == "end":
                 pass
@@ -1088,7 +1095,10 @@ def _parse_schema(f: TextIO) -> Schema:
                 if 'presence' in attrs:
                     x.presence = PRESENCE_TYPES[attrs['presence']]
                 if 'offset' in attrs:
-                    x.padding = int(attrs['offset']) - stack[-1].size()
+                    if isinstance(stack[-1], Composite):
+                        x.padding = int(attrs['offset']) - stack[-1].size()
+                    else:
+                        x.padding = int(attrs['offset'])
 
                 stack.append(x)
 

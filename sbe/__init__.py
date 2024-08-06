@@ -277,7 +277,8 @@ class Set:
 
     def encode(self, vals: Iterable[str]) -> int:
         vals = set(vals)
-        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).uint
+        assert vals.issubset({c.name for c in self.choices}), f"{vals} is not a subset of {self.choices}"
+        return bitstring.BitArray(v.name in vals for v in reversed(self.choices)).uint
 
     def decode(self, val: int) -> List[str]:
         if isinstance(self.encodingType, SetEncodingType):

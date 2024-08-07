@@ -107,6 +107,8 @@ class Type:
                 self.nullValue = float(nullValue)
             else:
                 self.nullValue = int(nullValue)
+        else:
+            self.nullValue = None
 
     def __repr__(self):
         rv = self.name + " ("
@@ -697,6 +699,8 @@ def _prettify_type(_schema: Schema, t: Type, v):
         t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
     ):
         return v.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
+    if t.nullValue is not None and v == t.nullValue:
+        return None
 
     return v
 

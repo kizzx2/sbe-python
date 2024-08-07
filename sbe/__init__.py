@@ -107,6 +107,8 @@ class Type:
                 self.nullValue = float(nullValue)
             else:
                 self.nullValue = int(nullValue)
+        else:
+            self.nullValue = None
 
     def __repr__(self):
         rv = self.name + " ("
@@ -277,7 +279,8 @@ class Set:
 
     def encode(self, vals: Iterable[str]) -> int:
         vals = set(vals)
-        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).uint
+        assert vals.issubset({c.name for c in self.choices}), f"{vals} is not a subset of {self.choices}"
+        return bitstring.BitArray(v.name in vals for v in reversed(self.choices)).uint
 
     def decode(self, val: int) -> List[str]:
         if isinstance(self.encodingType, SetEncodingType):
@@ -696,6 +699,8 @@ def _prettify_type(_schema: Schema, t: Type, v):
         t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
     ):
         return v.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
+    if t.nullValue is not None and v == t.nullValue:
+        return None
 
     return v
 

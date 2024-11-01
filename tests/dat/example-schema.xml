@@ -78,4 +78,10 @@
     <sbe:message name="TestNullValue" id="2">
         <field name="nullable" id="1" type="IntNULL"/>
     </sbe:message>
+    <sbe:message name="TestBlockLength" id="3" blockLength="4">
+        <field name="year" id="1" type="ModelYear"/>
+        <group name="AGroup" id="2" dimensionType="groupSizeEncoding" blbockLength="6">
+            <field name="numbers" id="1" type="someNumbers"/>
+        </group>
+    </sbe:message>
 </sbe:messageSchema>

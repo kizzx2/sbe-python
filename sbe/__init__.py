@@ -499,7 +499,8 @@ class Schema:
         fmts = []
         vals = []
         cursor = Cursor(0)
-        _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
+        _walk_fields_encode(self, message.fields, obj, fmts, vals,
+                            message.blockLength, cursor)
         fmt = "<" + ''.join(fmts)
 
         header = {
@@ -742,16 +743,22 @@ def _walk_fields_encode_composite(
                 cursor.val += FORMAT_SIZES[t1]
 
 
-def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
+def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]],
+                        obj: dict, fmt: list, vals: list, blockLength: int,
+                        cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
+            if cursor.val < blockLength:
+                fmt.append(str(blockLength - cursor.val) + 'x')
+                cursor.val = blockLength
             xs = obj[f.name]
 
             fmt1 = []
             vals1 = []
             block_length = None
             for x in xs:
-                _walk_fields_encode(schema, f.fields, x, fmt1, vals1, Cursor(0))
+                _walk_fields_encode(schema, f.fields, x, fmt1, vals1,
+                                    f.blockLength, Cursor(0))
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
 

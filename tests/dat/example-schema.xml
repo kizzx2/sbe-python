@@ -14,6 +14,7 @@
         <type name="Ron" primitiveType="uint8" minValue="90" maxValue="110"/>
         <type name="someNumbers" primitiveType="uint32" length="4"/>
         <type name="Percentage" primitiveType="int8" minValue="0" maxValue="100"/>
+        <type name="IntNULL" primitiveType="uint16" nullValue="65535"/>
         <composite name="Booster">
             <enum name="BoostType" encodingType="char">
                 <validValue name="TURBO">T</validValue>
@@ -73,5 +74,14 @@
         <data name="manufacturer" id="18" type="varStringEncoding"/>
         <data name="model" id="19" type="varStringEncoding"/>
         <data name="activationCode" id="20" type="varAsciiEncoding"/>
+    </sbe:message>
+    <sbe:message name="TestNullValue" id="2">
+        <field name="nullable" id="1" type="IntNULL"/>
+    </sbe:message>
+    <sbe:message name="TestBlockLength" id="3" blockLength="4">
+        <field name="year" id="1" type="ModelYear"/>
+        <group name="AGroup" id="2" dimensionType="groupSizeEncoding" blbockLength="6">
+            <field name="numbers" id="1" type="someNumbers"/>
+        </group>
     </sbe:message>
 </sbe:messageSchema>

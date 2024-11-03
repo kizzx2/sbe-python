@@ -107,6 +107,8 @@ class Type:
                 self.nullValue = float(nullValue)
             else:
                 self.nullValue = int(nullValue)
+        else:
+            self.nullValue = None
 
     def __repr__(self):
         rv = self.name + " ("
@@ -277,7 +279,8 @@ class Set:
 
     def encode(self, vals: Iterable[str]) -> int:
         vals = set(vals)
-        return bitstring.BitArray(v.name in vals for i, v in enumerate(self.choices)).uint
+        assert vals.issubset({c.name for c in self.choices}), f"{vals} is not a subset of {self.choices}"
+        return bitstring.BitArray(v.name in vals for v in reversed(self.choices)).uint
 
     def decode(self, val: int) -> List[str]:
         if isinstance(self.encodingType, SetEncodingType):
@@ -496,7 +499,8 @@ class Schema:
         fmts = []
         vals = []
         cursor = Cursor(0)
-        _walk_fields_encode(self, message.fields, obj, fmts, vals, cursor)
+        _walk_fields_encode(self, message.fields, obj, fmts, vals,
+                            message.blockLength, cursor)
         fmt = "<" + ''.join(fmts)
 
         header = {
@@ -696,6 +700,8 @@ def _prettify_type(_schema: Schema, t: Type, v):
         t.characterEncoding == CharacterEncoding.ASCII or t.characterEncoding is None
     ):
         return v.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
+    if t.nullValue is not None and v == t.nullValue:
+        return None
 
     return v
 
@@ -737,16 +743,22 @@ def _walk_fields_encode_composite(
                 cursor.val += FORMAT_SIZES[t1]
 
 
-def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]], obj: dict, fmt: list, vals: list, cursor: Cursor):
+def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]],
+                        obj: dict, fmt: list, vals: list, blockLength: int,
+                        cursor: Cursor):
     for f in fields:
         if isinstance(f, Group):
+            if cursor.val < blockLength:
+                fmt.append(str(blockLength - cursor.val) + 'x')
+                cursor.val = blockLength
             xs = obj[f.name]
 
             fmt1 = []
             vals1 = []
             block_length = None
             for x in xs:
-                _walk_fields_encode(schema, f.fields, x, fmt1, vals1, Cursor(0))
+                _walk_fields_encode(schema, f.fields, x, fmt1, vals1,
+                                    f.blockLength, Cursor(0))
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
 

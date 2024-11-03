@@ -1,15 +1,15 @@
 import sbe
 
 def test_parse1():
-    with open('tests/dat/example-schema.xml', 'r') as f:
+    with open('tests/dat/example-schema.xml', 'r', encoding='utf-8') as f:
         sbe.Schema.parse(f)
 
 def test_parse2():
-    with open('tests/dat/b3-entrypoint-messages-8.0.0.xml', 'r') as f:
+    with open('tests/dat/b3-entrypoint-messages-8.0.0.xml', 'r', encoding='utf-8') as f:
         sbe.Schema.parse(f)
 
 def test_nullValue():
-    with open('tests/dat/example-schema.xml', 'r') as f:
+    with open('tests/dat/example-schema.xml', 'r', encoding='utf-8') as f:
         s = sbe.Schema.parse(f)
         nullable = s.messages[2]
 
@@ -22,7 +22,7 @@ def test_nullValue():
         assert decodedNull.value['nullable'] is None
 
 def test_blockLength():
-    with open('tests/dat/example-schema.xml', 'r') as f:
+    with open('tests/dat/example-schema.xml', 'r', encoding='utf-8') as f:
         s = sbe.Schema.parse(f)
         msg  = s.messages[3]
 

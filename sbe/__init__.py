@@ -180,10 +180,10 @@ class Pointer:
         if self.enum:
             return self.enum.find_name_by_value(
                 rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
-        elif self.set_:
+        if self.set_:
             return self.set_.find_name_by_value(
                 rv.decode("ascii") if isinstance(rv, bytes) else str(rv))
-        elif self.value.endswith("s"):
+        if self.value.endswith("s"):
             return rv.split(b'\x00', 1)[0].decode('ascii', errors='ignore').strip()
 
         return rv
@@ -197,12 +197,11 @@ class Pointer:
     def __repr__(self):
         if self.enum:
             return f"{self.enum.name}@{self.offset}"
-        elif isinstance(self.value, WrappedComposite):
+        if isinstance(self.value, WrappedComposite):
             return f"{self.value.name}@{self.offset}"
-        elif self.value in FORMAT_TO_TYPE:
+        if self.value in FORMAT_TO_TYPE:
             return f"{FORMAT_TO_TYPE[self.value].value}@{self.offset}"
-        else:
-            return f"{self.value}@{self.offset}"
+        return f"{self.value}@{self.offset}"
 
 
 @dataclass
@@ -232,8 +231,7 @@ class Enum:
         val = next(x for x in self.valid_values if x.name == name).value
         if self.encodingType == EnumEncodingType.CHAR or (isinstance(self.encodingType, Type) and self.encodingType.primitiveType == PrimitiveType.CHAR):
             return val.encode()
-        else:
-            return int(val)
+        return int(val)
 
     def find_name_by_value(self, val: str) -> str:
         if val not in (x.value for x in self.valid_values):
@@ -260,7 +258,7 @@ class Composite:
                 else:
                     sz += FORMAT_SIZES[t.primitiveType]
             else:
-                assert(isinstance(t, Composite))
+                assert isinstance(t, Composite)
                 sz += t.size()
         return sz
 
@@ -314,8 +312,7 @@ class Field:
     def __repr__(self):
         if isinstance(self.type, PrimitiveType):
             return f"<{self.name} ({self.type.value})>"
-        else:
-            return f"<{self.name} ({self.type})>"
+        return f"<{self.name} ({self.type})>"
 
 
 @dataclass
@@ -587,10 +584,10 @@ def _unpack_format(
             buffer_cursor.val += FORMAT_SIZES[type_]
         return prefix + FORMAT[type_]
 
-    elif isinstance(type_, Field):
+    if isinstance(type_, Field):
         return _unpack_format(schema, type_.type, '', buffer, buffer_cursor)
 
-    elif isinstance(type_, Group):
+    if isinstance(type_, Group):
         if len(buffer[buffer_cursor.val:]) == 0:
             return ''
 
@@ -608,7 +605,7 @@ def _unpack_format(
 
         return rv
 
-    elif isinstance(type_, Type):
+    if isinstance(type_, Type):
         if type_.presence == Presence.CONSTANT:
             return ''
         if type_.padding > 0:
@@ -619,12 +616,12 @@ def _unpack_format(
             if buffer_cursor:
                 buffer_cursor.val += type_.length
             return prefix + f"{type_.length}s"
-        else:
-            if buffer_cursor:
-                buffer_cursor.val += FORMAT_SIZES[type_.primitiveType]
-            return prefix + FORMAT[type_.primitiveType]
 
-    elif isinstance(type_, (Set, Enum)):
+        if buffer_cursor:
+            buffer_cursor.val += FORMAT_SIZES[type_.primitiveType]
+        return prefix + FORMAT[type_.primitiveType]
+
+    if isinstance(type_, (Set, Enum)):
         if type_.presence == Presence.CONSTANT:
             return ''
         if isinstance(type_.encodingType, (PrimitiveType, EnumEncodingType, SetEncodingType)):
@@ -640,7 +637,7 @@ def _unpack_format(
 
         return _unpack_format(schema, type_.encodingType, '', buffer, buffer_cursor)
 
-    elif isinstance(type_, Composite):
+    if isinstance(type_, Composite):
         return prefix + ''.join(_unpack_format(schema, t, '', buffer, buffer_cursor) for t in type_.types)
 
 
@@ -832,8 +829,7 @@ def _resolve_ref_type(t: RefType, composite: Composite):
         if isinstance(parent, Schema):
             if t.type in parent.types:
                 return parent.types[t.type]
-            else:
-                assert False, f"RefType '{t.type}' not found in schema"
+            assert False, f"RefType '{t.type}' not found in schema"
         else:
             t1 = next((x for x in parent.types if x.name == t.type), None)
             if t1 is not None:
@@ -1177,7 +1173,7 @@ def _parse_schema_impl(doc, only_tags: Optional[list] = None, extra_types: Optio
                 assert isinstance(stack[-1], Set)
                 stack[-1].choices.append(x)
 
-        elif tag == "field" or tag=="data":
+        elif tag in ('field', 'data'):
             if action == "start":
                 assert len(elem) == 0
 

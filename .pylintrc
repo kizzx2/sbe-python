@@ -1,3 +1,3 @@
 [MASTER]
 extension-pkg-whitelist=lxml
-disable=line-too-long,too-many-lines
+disable=line-too-long,too-many-lines,too-many-locals,too-many-positional-arguments,too-many-branches,too-many-return-statements,too-many-instance-attributes,invalid-name,missing-function-docstring,missing-class-docstring,too-many-statements,too-many-arguments,missing-module-docstring

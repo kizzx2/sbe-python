@@ -2,3 +2,5 @@
 /dist/
 /sbe.egg-info/
 __pycache__/
+.venv
+.eggs

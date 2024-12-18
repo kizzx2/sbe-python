@@ -758,8 +758,12 @@ def _walk_fields_encode(schema: Schema, fields: List[Union[Group, Field]],
                                     f.blockLength, Cursor(0))
                 if block_length is None:
                     block_length = struct.calcsize("<" + ''.join(fmt1))
+                    if f.blockLength:
+                        assert f.blockLength >= block_length
+                if f.blockLength and f.blockLength > block_length:
+                    fmt1.append(str(f.blockLength - block_length) + 'x')
 
-            dimension = {"numInGroup": len(obj[f.name]), "blockLength": block_length or f.blockLength or 0}
+            dimension = {"numInGroup": len(obj[f.name]), "blockLength": f.blockLength or block_length or 0}
             dimension_fmt = _pack_format(schema, f.dimensionType)
 
             fmt.extend(dimension_fmt)

@@ -1165,7 +1165,7 @@ def _parse_schema_impl(doc, only_tags: Optional[list] = None, extra_types: Optio
             elif action == "end":
                 x = stack.pop()
                 assert isinstance(stack[-1], Schema)
-                x.choices = sorted(x.choices, key=lambda y: int(y.value))
+                x.choices = sorted(x.choices, key=lambda y: int(y.value), reverse=True)
                 stack[-1].types[x.name] = x
 
         elif tag == "choice":

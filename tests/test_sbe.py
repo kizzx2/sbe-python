@@ -30,9 +30,10 @@ def test_blockLength():
                                                           {'numbers': 456}]})
         # BlockHeader = 8b
         # Body = 2b year + 2b padding
+        # GroupHeader = 4b
         # Repeating group = 2 * (4b numbers + 2b padding)
-        expLen = 8 + 4 + 2*6
-        assert len(encoded) == expLen, "Encoded SBE not padded properly"
+        expLen = 8 + 4 + 4 + 2*6
+        assert len(encoded) == expLen, f"Encoded SBE not padded properly. Expected {expLen} actual {len(encoded)}"
 
         decoded  = s.decode(encoded)
         assert decoded.value['year'] == 1990

@@ -80,7 +80,7 @@
     </sbe:message>
     <sbe:message name="TestBlockLength" id="3" blockLength="4">
         <field name="year" id="1" type="ModelYear"/>
-        <group name="AGroup" id="2" dimensionType="groupSizeEncoding" blbockLength="6">
+        <group name="AGroup" id="2" dimensionType="groupSizeEncoding" blockLength="6">
             <field name="numbers" id="1" type="someNumbers"/>
         </group>
     </sbe:message>
